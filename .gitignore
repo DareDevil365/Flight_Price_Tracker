@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+venv/
+env/
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.sqlite3
+*.db
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+
+# Logs and tmp
+logs/
+*.log
+debug_search.png
+.gemini/
+
+# Frontend
+frontend/dist/
+frontend/build/

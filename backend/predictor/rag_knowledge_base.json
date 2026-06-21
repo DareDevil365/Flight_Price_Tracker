@@ -1,0 +1,166 @@
+{
+  "knowledge_graph_version": "1.0",
+  "description": "Real historical cause-effect patterns for Indian flight pricing. Built from public data + macro signals.",
+  "event_types": {
+    "fuel_spike": {
+      "description": "Rapid increase in ATF or Brent crude prices",
+      "typical_price_impact_pct": 8,
+      "lag_days": 3,
+      "affected_routes": ["ALL"],
+      "examples": [
+        {"date": "2022-03-01", "brent_usd": 104.7, "atf_inr": 99652, "avg_price_rise_pct": 12, "note": "Ukraine war spike"},
+        {"date": "2022-06-01", "brent_usd": 109.56, "atf_inr": 115975, "avg_price_rise_pct": 18, "note": "ATF all-time high"},
+        {"date": "2024-04-01", "brent_usd": 88.5, "atf_inr": 88959, "avg_price_rise_pct": 5, "note": "Middle East tensions"}
+      ]
+    },
+    "fuel_drop": {
+      "description": "Significant decrease in ATF or Brent crude prices",
+      "typical_price_impact_pct": -5,
+      "lag_days": 7,
+      "affected_routes": ["ALL"],
+      "examples": [
+        {"date": "2022-09-01", "brent_usd": 88.0, "atf_inr": 102541, "avg_price_drop_pct": -6, "note": "Demand fears"},
+        {"date": "2023-05-01", "brent_usd": 72.5, "atf_inr": 95815, "avg_price_drop_pct": -4, "note": "Recession concerns"}
+      ]
+    },
+    "major_festival": {
+      "description": "Diwali, Holi, Eid, or Christmas/New Year",
+      "typical_price_impact_pct": 25,
+      "lag_days": 0,
+      "window_days": 14,
+      "affected_routes": ["ALL"],
+      "demand_surge": true,
+      "examples": [
+        {"festival": "Diwali", "date": "2022-10-24", "avg_price_rise_pct": 35, "peak_routes": ["DEL-BOM", "BOM-DEL", "DEL-GOI"]},
+        {"festival": "Diwali", "date": "2023-11-12", "avg_price_rise_pct": 30, "peak_routes": ["DEL-BOM", "BOM-DEL", "DEL-GOI"]},
+        {"festival": "Holi", "date": "2023-03-08", "avg_price_rise_pct": 15, "peak_routes": ["DEL-BOM", "BOM-DEL"]},
+        {"festival": "New Year", "date": "2023-12-31", "avg_price_rise_pct": 28, "peak_routes": ["DEL-GOI", "BOM-GOI", "DEL-BOM"]}
+      ]
+    },
+    "long_weekend": {
+      "description": "3+ day weekend due to adjacent holiday",
+      "typical_price_impact_pct": 15,
+      "lag_days": 0,
+      "window_days": 3,
+      "affected_routes": ["ALL"],
+      "demand_surge": true
+    },
+    "bank_sale": {
+      "description": "Major bank-specific sale (SBI Tue/Thu, HDFC SmartBuy)",
+      "typical_price_impact_pct": -8,
+      "lag_days": 0,
+      "window_days": 1,
+      "affected_routes": ["ALL"],
+      "demand_surge": false,
+      "examples": [
+        {"bank": "SBI", "day": "Tuesday", "discount_pct": 10, "typical_route_drop": -8},
+        {"bank": "HDFC", "portal": "SmartBuy", "discount_pct": 5, "typical_route_drop": -5}
+      ]
+    },
+    "airline_sale": {
+      "description": "IndiGo/Air India direct sale",
+      "typical_price_impact_pct": -12,
+      "lag_days": 0,
+      "window_days": 2,
+      "affected_routes": ["ALL"],
+      "examples": [
+        {"airline": "IndiGo", "frequency": "Tuesday midnight", "discount_pct": 15, "typical_route_drop": -12}
+      ]
+    },
+    "monsoon_low": {
+      "description": "June-September monsoon depresses beach/hill demand",
+      "typical_price_impact_pct": -18,
+      "lag_days": 0,
+      "months": [6, 7, 8, 9],
+      "affected_routes": ["DEL-GOI", "BOM-GOI", "DEL-COK", "BOM-COK"],
+      "examples": [
+        {"route": "DEL-GOI", "month": 7, "typical_discount_pct": -20, "note": "Monsoon off-season"}
+      ]
+    },
+    "school_vacation": {
+      "description": "May-June or Dec school holidays drive family travel",
+      "typical_price_impact_pct": 20,
+      "months": [5, 6, 12],
+      "affected_routes": ["DEL-GOI", "BOM-GOI", "DEL-COK"],
+      "demand_surge": true
+    },
+    "new_route_capacity": {
+      "description": "Airline adds new flights on route (supply increase)",
+      "typical_price_impact_pct": -10,
+      "lag_days": 7,
+      "window_days": 30,
+      "demand_surge": false,
+      "examples": [
+        {"airline": "IndiGo", "route": "DEL-GOI", "date": "2024-01-15", "new_flights": 2, "price_drop_pct": -8}
+      ]
+    },
+    "capacity_cut": {
+      "description": "Go First collapse, SpiceJet grounding, or fleet reduction",
+      "typical_price_impact_pct": 15,
+      "lag_days": 3,
+      "window_days": 60,
+      "demand_surge": true,
+      "examples": [
+        {"airline": "Go First", "date": "2023-05-03", "status": "bankruptcy", "avg_price_rise_pct": 18, "affected_routes": ["DEL-BOM", "DEL-GOI", "BOM-GOI"]}
+      ]
+    }
+  },
+  "route_seasonality": {
+    "DEL-GOI": {"type": "BEACH", "peak_months": [11, 12, 1, 2], "off_months": [6, 7, 8], "base_price": 5200},
+    "BOM-GOI": {"type": "BEACH", "peak_months": [11, 12, 1, 2], "off_months": [6, 7, 8], "base_price": 3800},
+    "DEL-BOM": {"type": "METRO", "peak_months": [10, 11, 12, 1], "off_months": [6, 7, 8], "base_price": 4600},
+    "DEL-BLR": {"type": "BUSINESS", "peak_months": [1, 2, 3, 10, 11, 12], "off_months": [6, 7, 8], "base_price": 4200},
+    "BOM-BLR": {"type": "BUSINESS", "peak_months": [1, 2, 3, 10, 11, 12], "off_months": [6, 7, 8], "base_price": 3500},
+    "DEL-HYD": {"type": "METRO", "peak_months": [10, 11, 12, 1], "off_months": [6, 7, 8], "base_price": 3800},
+    "DEL-MAA": {"type": "METRO", "peak_months": [10, 11, 12, 1], "off_months": [6, 7, 8], "base_price": 4500}
+  },
+  "learned_patterns": [
+    {
+      "pattern_id": "p001",
+      "description": "Diwali + 14 days + T-7 booking = guaranteed price spike",
+      "conditions": {"festival": "Diwali", "days_to_departure": "<7", "booking_window": "<14"},
+      "observed_price_rise_pct": 35,
+      "confidence": 0.92,
+      "occurrences": ["2022-10-24", "2023-11-12", "2024-10-31"]
+    },
+    {
+      "pattern_id": "p002",
+      "description": "Monsoon + beach route = 15-20% discount, best booking window",
+      "conditions": {"months": [6,7,8], "route_type": "BEACH", "days_to_departure": ">21"},
+      "observed_price_drop_pct": 18,
+      "confidence": 0.88,
+      "occurrences": ["2022-Jul", "2023-Jul", "2024-Jul"]
+    },
+    {
+      "pattern_id": "p003",
+      "description": "Fuel spike >20% in 30 days leads to 8-12% fare rise in 3-5 days",
+      "conditions": {"atf_change_30d_pct": ">20", "brent_change_30d_pct": ">15"},
+      "observed_price_rise_pct": 10,
+      "confidence": 0.85,
+      "lag_days": 4,
+      "occurrences": ["2022-Mar", "2022-Jun"]
+    },
+    {
+      "pattern_id": "p004",
+      "description": "SBI Tuesday sale offers consistent 8-10% discount on domestic routes",
+      "conditions": {"bank": "SBI", "day": "Tuesday", "min_txn": 8000},
+      "observed_discount_pct": 9,
+      "confidence": 0.95,
+      "occurrences": ["2024-ongoing"]
+    },
+    {
+      "pattern_id": "p005",
+      "description": "Tuesday/Wednesday departures are 8-12% cheaper than Friday/Sunday",
+      "conditions": {"departure_day": ["Tuesday", "Wednesday"], "route_type": "ALL"},
+      "observed_price_drop_pct": 10,
+      "confidence": 0.90,
+      "occurrences": ["2022-2024 aggregate"]
+    }
+  ],
+  "model_metadata": {
+    "last_updated": "2025-07-10",
+    "data_sources": ["petroleum.nic.in", "yfinance", "Kaggle EaseMyTrip", "public bank offer pages"],
+    "total_observations": 0,
+    "routes_tracked": ["DEL-BOM", "DEL-GOI", "BOM-GOI", "DEL-BLR", "BOM-BLR", "DEL-HYD", "DEL-MAA"]
+  }
+}

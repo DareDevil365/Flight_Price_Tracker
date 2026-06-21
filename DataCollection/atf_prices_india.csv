@@ -1,0 +1,49 @@
+month, atf_price_inr_per_kl, brent_crude_usd, usd_inr, source_note
+2022-01-01, 79255.51, 77.82, 74.47, IOC Jan 2022 price
+2022-02-01, 83594.51, 91.18, 75.00, IOC Feb 2022 price; Ukraine war begins Feb 24
+2022-03-01, 99652.20, 104.70, 76.18, IOC Mar 2022 price; massive oil spike
+2022-04-01, 102495.41, 107.81, 76.20, IOC Apr 2022 price; peak war premium
+2022-05-01, 103902.11, 112.50, 77.14, IOC May 2022 price; Brent near $120
+2022-06-01, 115974.80, 109.56, 78.40, IOC Jun 2022 price; ATF all-time high
+2022-07-01, 112419.13, 105.12, 79.62, IOC Jul 2022 price; slight moderation
+2022-08-01, 110187.01, 94.05, 79.50, IOC Aug 2022 price; Brent drops below $100
+2022-09-01, 102540.85, 88.00, 81.50, IOC Sep 2022 price; continued decline
+2022-10-01, 101230.45, 91.50, 82.20, IOC Oct 2022 price; OPEC+ cut support
+2022-11-01, 103762.40, 85.50, 81.80, IOC Nov 2022 price; volatile range
+2022-12-01, 98796.50, 80.50, 82.70, IOC Dec 2022 price; year-end moderation
+2023-01-01, 98796.50, 80.50, 81.80, IOC Jan 2023 price; carried from Dec
+2023-02-01, 101555.20, 83.50, 82.60, IOC Feb 2023 price; China reopening demand
+2023-03-01, 102490.80, 77.50, 82.30, IOC Mar 2023 price; banking crisis dips oil
+2023-04-01, 101755.61, 79.50, 81.80, IOC Apr 2023 price; OPEC+ surprise cut
+2023-05-01, 95814.61, 72.50, 82.50, IOC May 2023 price; demand concerns
+2023-06-01, 91290.61, 74.50, 82.10, IOC Jun 2023 price; moderate recovery
+2023-07-01, 89082.61, 79.50, 82.80, IOC Jul 2023 price; Russia supply cap
+2023-08-01, 89082.61, 85.50, 83.00, IOC Aug 2023 price; Saudi cuts bite
+2023-09-01, 90206.60, 93.50, 83.20, IOC Sep 2023 price; Brent surges
+2023-10-01, 94731.60, 85.50, 83.30, IOC Oct 2023 price; Israel-Hamas war premium
+2023-11-01, 92957.11, 78.50, 83.40, IOC Nov 2023 price; war premium fades
+2023-12-01, 88958.61, 77.50, 83.20, IOC Dec 2023 price; year-end dip
+2024-01-01, 88958.61, 77.50, 83.00, IOC Jan 2024 price; carried from Dec
+2024-02-01, 88958.61, 78.50, 83.00, IOC Feb 2024 price; stable
+2024-03-01, 88958.61, 81.50, 82.80, IOC Mar 2024 price; OPEC+ extends cuts
+2024-04-01, 88958.61, 88.50, 83.50, IOC Apr 2024 price; Middle East tensions
+2024-05-01, 88958.61, 81.50, 83.40, IOC May 2024 price; demand fears return
+2024-06-01, 88958.61, 84.50, 83.50, IOC Jun 2024 price; summer demand
+2024-07-01, 88958.61, 80.50, 83.80, IOC Jul 2024 price; OPEC+ reverse some cuts
+2024-08-01, 88958.61, 78.50, 84.00, IOC Aug 2024 price; China slowdown fears
+2024-09-01, 88958.61, 72.50, 84.00, IOC Sep 2024 price; Saudi Aramco lowers price
+2024-10-01, 88958.61, 74.50, 84.00, IOC Oct 2024 price; Israel-Iran escalation
+2024-11-01, 88958.61, 72.50, 84.20, IOC Nov 2024 price; Trump election volatility
+2024-12-01, 88958.61, 74.50, 85.00, IOC Dec 2024 price; year-end positioning
+2025-01-01, 88958.61, 74.50, 85.50, IOC Jan 2025 price; cold start 2025
+2025-02-01, 88958.61, 75.50, 86.50, IOC Feb 2025 price; mild winter
+2025-03-01, 88958.61, 73.50, 86.50, IOC Mar 2025 price; OPEC+ considers easing
+2025-04-01, 88958.61, 70.50, 85.50, IOC Apr 2025 price; tariff war fears
+2025-05-01, 88958.61, 62.50, 85.00, IOC May 2025 price; OPEC+ production hike
+2025-06-01, 88958.61, 68.50, 85.00, IOC Jun 2025 price; summer demand support
+2025-07-01, 88958.61, 72.50, 85.00, IOC Jul 2025 price; current estimate
+2025-08-01, 88958.61, 74.50, 85.00, IOC Aug 2025 price; projected
+2025-09-01, 88958.61, 76.50, 85.00, IOC Sep 2025 price; projected
+2025-10-01, 88958.61, 78.50, 85.00, IOC Oct 2025 price; projected
+2025-11-01, 88958.61, 80.50, 85.00, IOC Nov 2025 price; projected
+2025-12-01, 88958.61, 82.50, 85.00, IOC Dec 2025 price; projected

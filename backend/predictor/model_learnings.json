@@ -1,0 +1,69 @@
+{
+  "model_metadata": {
+    "xgboost_global": {
+      "model_type": "GradientBoostedTrees",
+      "hyperparameters": {
+        "n_estimators": 100,
+        "max_depth": 5,
+        "learning_rate": 0.08,
+        "random_state": 42
+      },
+      "features_used": [
+        "days_to_departure",
+        "booking_window_percentile",
+        "hour_of_departure",
+        "days_since_last_price_drop",
+        "days_to_nearest_public_holiday",
+        "destination_peak_season_score",
+        "brent_crude_price_usd",
+        "usd_inr_rate"
+      ],
+      "mape_target": 0.15,
+      "mape_retrain_threshold": 0.25
+    },
+    "prophet_route_forecaster": {
+      "model_type": "AdditiveTimeSeries",
+      "yearly_seasonality": true,
+      "weekly_seasonality": true,
+      "daily_seasonality": false,
+      "min_observations_required": 90,
+      "retrain_interval_days": 7
+    }
+  },
+  "ensemble_weights": {
+    "standard": {
+      "rules_engine": 0.40,
+      "prophet": 0.35,
+      "xgboost": 0.25
+    },
+    "safety_fallback_cold_start": {
+      "rules_engine": 0.70,
+      "xgboost": 0.30
+    }
+  },
+  "rules_priority": [
+    "CRITICAL_SEATS",
+    "FESTIVAL_IMMINENT",
+    "HISTORIC_PRICE_LOW",
+    "SCHOOL_VACATION_SOON",
+    "AIRLINE_SALE_IMMINENT",
+    "CANCELLATION_RESTOCK",
+    "COMPETITOR_SALE_MIRROR",
+    "CRUDE_OIL_FALLING",
+    "LONG_WEEKEND_SURGE"
+  ],
+  "error_attributions_map": {
+    "monsoon": {
+      "feature_dampened": "destination_monsoon_active",
+      "factor": 0.85
+    },
+    "exams": {
+      "feature_dampened": "is_exam_period",
+      "factor": 0.75
+    },
+    "flash_sale": {
+      "feature_dampened": "price_percentile_last_90_days",
+      "factor": 0.80
+    }
+  }
+}

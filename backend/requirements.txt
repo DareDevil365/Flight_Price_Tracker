@@ -1,0 +1,20 @@
+fastapi
+uvicorn[standard]
+websockets
+playwright
+playwright-stealth
+camoufox>=0.4.0
+browserforge>=1.0.0
+aiohttp
+aiosqlite
+pillow
+openai
+pydantic
+python-dotenv
+redis
+beautifulsoup4
+lxml
+schedule
+loguru
+pywin32>=306; sys_platform == "win32"
+pyobjc; sys_platform == "darwin"
