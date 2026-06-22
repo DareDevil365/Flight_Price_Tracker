@@ -515,10 +515,10 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
                     }}
                   >
                     <div>
-                      <div style={{ fontWeight: 600, color: active ? "rgba(0, 0, 0, 0.9)" : "inherit" }}>{p.name}</div>
-                      <div style={{ fontSize: 10, color: active ? "rgba(0, 0, 0, 0.6)" : "hsl(var(--text-muted))", marginTop: 2 }}>{p.desc}</div>
+                      <div style={{ fontWeight: 600, color: active ? "#ffffff" : "inherit" }}>{p.name}</div>
+                      <div style={{ fontSize: 10, color: active ? "rgba(255, 255, 255, 0.7)" : "hsl(var(--text-muted))", marginTop: 2 }}>{p.desc}</div>
                     </div>
-                    {active && <Check size={14} color="black" />}
+                    {active && <Check size={14} color="white" />}
                   </div>
                 );
               })}

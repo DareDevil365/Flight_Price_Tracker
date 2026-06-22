@@ -23,9 +23,9 @@ export default function Sidebar({ activeTab, onTabChange, connected, resultCount
     <div className="sidebar">
       <div className="logo">
         <div className="logo-icon">
-          <Plane size={14} color="black" />
+          <Plane size={14} color="white" />
         </div>
-        <span>FLIGHT FINDER</span>
+        <span>SkyIntel</span>
       </div>
 
       <div className="sidebar-nav-container">
