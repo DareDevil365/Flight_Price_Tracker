@@ -23,6 +23,7 @@ export default function ResultsRanker({ sendMessage }: ResultsRankerProps) {
   const setHighlightedFlightId = useResultStore((s) => s.setHighlightedFlightId);
   const updateTrip = useSearchStore((s) => s.updateTrip);
   const setActiveTab = useSearchStore((s) => s.setActiveTab);
+  const searchStatus = useSearchStore((s) => s.status);
 
   // Combine suggestions from store or fall back to legacy prediction-based suggestions
   const activeSuggestions = suggestions ? {
@@ -74,11 +75,45 @@ export default function ResultsRanker({ sendMessage }: ResultsRankerProps) {
           <h1 className="page-title">Verified Flight Results</h1>
           <p className="page-subtitle">True Cost comparison: final verified checkout price including convenience fees, coupons, and payment rewards.</p>
         </div>
-        <div className="glass-card empty-state">
-          <Activity size={36} className="empty-state-icon" />
-          <div className="empty-state-title">No Verified Results</div>
-          <div className="empty-state-desc">Run a flight search from the Cockpit tab to dispatch agents and collect savings.</div>
-        </div>
+        {searchStatus === "running" ? (
+          <div className="grid-2-1 animate-fade-in">
+            <div className="flex-col gap-md">
+              {/* Shimmer Skeletons for flight cards */}
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="skeleton-card">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div className="glass-skeleton skeleton-title" style={{ width: "30%", height: 18 }}></div>
+                    <div className="glass-skeleton" style={{ width: "15%", height: 16 }}></div>
+                  </div>
+                  <div className="glass-skeleton skeleton-subtitle" style={{ width: "60%", height: 12, marginTop: 10 }}></div>
+                  <div className="divider-dashed" style={{ margin: "14px 0 10px" }} />
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div className="glass-skeleton" style={{ width: "45%", height: 12 }}></div>
+                    <div className="glass-skeleton" style={{ width: "20%", height: 12 }}></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="flex-col gap-md">
+              {/* Shimmer Skeleton for details/matrix */}
+              <div className="skeleton-card" style={{ height: 380, display: "flex", flexDirection: "column" }}>
+                <div className="glass-skeleton skeleton-title" style={{ width: "50%", height: 18 }}></div>
+                <div className="glass-skeleton skeleton-subtitle" style={{ width: "80%", height: 12, marginTop: 10, marginBottom: 24 }}></div>
+                <div style={{ flex: 1, display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, paddingBottom: 10 }}>
+                  {[60, 40, 80, 50, 90, 70].map((h, idx) => (
+                    <div key={idx} className="glass-skeleton" style={{ width: "14%", height: `${h}%`, borderRadius: "4px 4px 0 0" }}></div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="glass-card empty-state">
+            <Activity size={36} className="empty-state-icon" />
+            <div className="empty-state-title">No Verified Results</div>
+            <div className="empty-state-desc">Run a flight search from the Cockpit tab to dispatch agents and collect savings.</div>
+          </div>
+        )}
       </div>
     );
   }

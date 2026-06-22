@@ -358,7 +358,7 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
           <div style={{ flex: 1, position: "relative" }}>
             <input
               type="text"
-              className="form-input"
+              className={`form-input ${nlpExtracting ? "analyzing" : ""}`}
               placeholder='e.g. "Delhi to Goa next Friday, evening flight, non-stop, economy for 2"'
               value={nlpQuery}
               onChange={(e) => setNlpQuery(e.target.value)}
