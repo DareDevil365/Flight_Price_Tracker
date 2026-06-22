@@ -15,6 +15,39 @@ from workers.easemytrip_worker import EaseMyTripWorker
 from workers.cleartrip_worker import CleartripWorker
 from workers.ai_worker import AIWorker
 
+from compiler import is_domestic_route
+
+def is_coupon_airline_match(coupon_desc: str, flight_airline: str) -> bool:
+    if not coupon_desc or not flight_airline:
+        return True
+    
+    known_airlines = {
+        "indigo": ["indigo", "6e"],
+        "spicejet": ["spicejet", "sg"],
+        "vistara": ["vistara", "uk"],
+        "air india": ["air india", "ai"],
+        "akasa": ["akasa", "qp"],
+        "air india express": ["air india express", "express", "ix"]
+    }
+    
+    desc_lower = coupon_desc.lower()
+    flight_airline_lower = flight_airline.lower()
+    
+    mentioned_airlines = []
+    for brand, keywords in known_airlines.items():
+        if any(kw in desc_lower for kw in keywords):
+            mentioned_airlines.append(brand)
+            
+    if not mentioned_airlines:
+        return True
+        
+    for brand in mentioned_airlines:
+        for kw in known_airlines[brand]:
+            if kw in flight_airline_lower:
+                return True
+                
+    return False
+
 
 
 class Dispatcher:
@@ -240,7 +273,7 @@ class Dispatcher:
         cloak = task["cloak"]
         
         base_dt = datetime.strptime(trip["departure_date"], "%Y-%m-%d")
-        offsets = [0] + list(range(-7, 0)) + list(range(1, 8)) # Scan target date and ±7 days
+        offsets = [0] + list(range(-2, 0)) + list(range(1, 3)) # Scan target date and ±2 days
         date_alternatives = []
         
         worker = GoogleFlightsWorker()
@@ -483,10 +516,20 @@ class Dispatcher:
                 except Exception as e:
                     logger.warning(f"Failed to scrape onsite coupons: {e}")
                 
+                # Filter coupons by airline matching for the selected flight
+                coupons = [c for c in coupons if is_coupon_airline_match(c.get("description", ""), selected_flight["airline"])]
+
                 # Run sequential coupon testing
                 from coupon_brute_forcer import CouponBruteForcer
                 forcer = CouponBruteForcer(worker, self.financial_filter, self.emit_log)
-                bf_result = await forcer.brute_force(page, coupons, financial, search_id)
+                bf_result = await forcer.brute_force(
+                    page,
+                    coupons,
+                    financial,
+                    search_id,
+                    db=self.db,
+                    route=f"{trip['origin']}-{trip['destination']}"
+                )
                 
                 # ── CALCULATE SCORES AND SAVE ALL TARGET FLIGHTS ──
                 self.emit_ws("bot:status", {"searchId": search_id, "platform": platform, "phase": "aggregating", "progress": 90})
@@ -494,13 +537,17 @@ class Dispatcher:
                 # Get set of successful coupon codes from brute force
                 successful_codes = {r["code"] for r in bf_result["all_results"] if r.get("status") == "valid_match"}
                 
+                is_dom = is_domestic_route(trip["origin"], trip["destination"])
+                price_floor = 1200.0 if is_dom else 1.0
+
                 for idx, f in enumerate(target_flights):
                     winning_coupon = None
                     if idx == 0:
                         f_base = baseline_price
                         f_coupon = bf_result["best_coupon"]
                         f_savings = min(bf_result["savings"], f_base)
-                        f_final = max(0.0, f_base - f_savings)
+                        f_final = max(price_floor, f_base - f_savings)
+                        f_savings = max(0.0, f_base - f_final)
                         if f_coupon:
                             winning_coupon = next((c for c in coupons if c["code"].upper() == f_coupon.upper()), None)
                     else:
@@ -510,6 +557,9 @@ class Dispatcher:
                         passed_coupons, _ = self.financial_filter.filter_coupons(coupons, financial)
                         for coupon in passed_coupons:
                             if coupon["code"] not in successful_codes:
+                                continue
+                            # Apply airline match filter
+                            if not is_coupon_airline_match(coupon.get("description", ""), f["airline"]):
                                 continue
                             min_booking = coupon.get("min_booking_value") or 0.0
                             if f_base >= min_booking:
@@ -541,8 +591,6 @@ class Dispatcher:
                         
                         # Apply coupon instincts check & correction
                         if self.coupon_instincts and f_coupon:
-                            from compiler import is_domestic_route
-                            is_dom = is_domestic_route(trip["origin"], trip["destination"])
                             corrected_savings = await self.coupon_instincts.audit_and_correct(
                                 platform=platform,
                                 coupon_code=f_coupon,
@@ -554,7 +602,8 @@ class Dispatcher:
                             f_savings = corrected_savings
                             
                         f_savings = min(f_savings, f_base)
-                        f_final = max(0.0, f_base - f_savings)
+                        f_final = max(price_floor, f_base - f_savings)
+                        f_savings = max(0.0, f_base - f_final)
                     
                     # Stacking savings
                     bank_restriction = None
@@ -719,7 +768,10 @@ class Dispatcher:
                     f_base = f["base_price"]
                     f_coupon = ""
                     f_savings = 0.0
-                    f_final = f_base
+                    
+                    is_dom = is_domestic_route(trip["origin"], trip["destination"])
+                    price_floor = 1200.0 if is_dom else 1.0
+                    f_final = max(price_floor, f_base)
                     winning_coupon = None
                     
                     # Offline mathematical coupon matching
@@ -727,6 +779,9 @@ class Dispatcher:
                         passed_coupons, _ = self.financial_filter.filter_coupons(coupons, financial)
                         best_discount = 0.0
                         for coupon in passed_coupons:
+                            # Apply airline match filter
+                            if not is_coupon_airline_match(coupon.get("description", ""), f["airline"]):
+                                continue
                             min_booking = coupon.get("min_booking_value") or 0.0
                             if f_base >= min_booking:
                                 discount = 0.0
@@ -748,8 +803,6 @@ class Dispatcher:
                             
                             # Apply coupon instincts check & correction
                             if self.coupon_instincts:
-                                from compiler import is_domestic_route
-                                is_dom = is_domestic_route(trip["origin"], trip["destination"])
                                 corrected_savings = await self.coupon_instincts.audit_and_correct(
                                     platform=platform,
                                     coupon_code=f_coupon,
@@ -760,9 +813,16 @@ class Dispatcher:
                                 )
                                 f_savings = corrected_savings
 
-                            f_final = f_base - f_savings
+                            f_final = max(price_floor, f_base - f_savings)
+                            f_savings = max(0.0, f_base - f_final)
                             if idx == 0:
                                 self.emit_log(search_id, platform, "success", f"Mathematically matched best coupon: {f_coupon} (saves Rs. {f_savings})")
+                        else:
+                            f_final = max(price_floor, f_base)
+                            f_savings = max(0.0, f_base - f_final)
+                    else:
+                        f_final = max(price_floor, f_base)
+                        f_savings = max(0.0, f_base - f_final)
                     
                     # Stacking savings
                     bank_restriction = None

@@ -61,7 +61,7 @@ class CouponInstinctsEngine:
 
     async def analyze_coupon_with_ai(self, coupon_code: str, coupon_desc: str, base_price: float, is_domestic: bool) -> dict:
         """
-        Query Gemini 2.5 Pro to analyze the coupon terms and determine the true applicable discount.
+        Query Gemini 2.5 Pro to analyze the coupon terms and determine the true applicable discount and global parameters.
         """
         prompt = f"""
         You are an elite travel agent and financial coupon analyst. You have instincts about flight prices and ticket discounts.
@@ -77,13 +77,18 @@ class CouponInstinctsEngine:
         2. Flat coupons cannot exceed the base price.
         3. If the coupon is explicitly NOT valid for the current flight type (e.g. says "valid on international flights only" but we are on domestic), then is_applicable should be false.
         
-        Determine:
-        1. Is this coupon applicable to the current flight? (is_applicable: true/false)
-        2. What is the actual, true discount value in Indian Rupees (INR) that applies to this base price? (applicable_discount_value: number)
-        3. Is this discount type "FLAT" or "PERCENT"? (discount_type: "FLAT"/"PERCENT")
-        4. Provide a brief explanation of your reasoning. (reason: string)
+        Determine both the current flight-specific applicability/discount, and the general/global coupon parameters as specified in the description.
         
-        Output strictly valid JSON with keys: "is_applicable", "applicable_discount_value", "discount_type", "reason". Do not wrap in markdown or backticks.
+        Output strictly valid JSON with keys:
+        - "is_applicable": (true/false) whether coupon applies to the current flight.
+        - "applicable_discount_value": (number) the actual, true discount in Indian Rupees (INR) that applies to this specific flight base price.
+        - "general_discount_type": ("FLAT" or "PERCENT") the global type of discount described by the coupon.
+        - "general_discount_value": (number) the general value (e.g. 10 for 10%, 400 for Rs. 400 flat).
+        - "general_max_discount": (number or null) the maximum discount limit in INR (e.g. 2000 for "up to Rs. 2000"), or null/999999 if no limit.
+        - "general_min_booking_value": (number or null) the minimum booking value in INR required to use this coupon, or null/0 if none.
+        - "reason": (string) brief explanation of your reasoning.
+        
+        Do not wrap in markdown or backticks.
         """
         
         try:
@@ -144,10 +149,11 @@ class CouponInstinctsEngine:
         audit_reason = reason
 
         if ai_failed:
-            # AI failed (rate limit, etc). Use 0.0 as runtime failsafe, but do NOT update DB!
-            corrected_discount = 0.0
+            # AI failed (rate limit, etc). Log warning and return calculated_discount fallback instead of zeroing out
+            logger.warning(f"[CouponInstinctsEngine] AI analysis failed for {coupon_code}. Falling back to calculated discount ₹{calculated_discount}.")
+            corrected_discount = calculated_discount
             was_corrected = False
-            audit_reason = f"Runtime failsafe triggered (AI analysis failed: {ai_res.get('reason')})"
+            audit_reason = f"AI analysis failed (Reason: {ai_res.get('reason')}). Falling back to calculated discount."
         elif not ai_res.get("is_applicable", True):
             # Coupon not applicable! Deactivate it
             corrected_discount = 0.0
@@ -161,35 +167,44 @@ class CouponInstinctsEngine:
                 except Exception as e:
                     logger.error(f"Failed to deactivate coupon in DB: {e}")
         else:
-            ai_val = ai_res.get("applicable_discount_value", 0.0)
-            ai_type = ai_res.get("discount_type", "FLAT")
+            corrected_discount = ai_res.get("applicable_discount_value", 0.0)
             
-            # Capping: ensure discount value makes sense
-            if ai_type == "PERCENT":
-                max_discount_val = base_price * (ai_val / 100.0)
-            else:
-                max_discount_val = ai_val
-                
-            if max_discount_val != calculated_discount:
-                corrected_discount = max_discount_val
+            if corrected_discount != calculated_discount:
                 was_corrected = True
-                audit_reason = f"AI adjusted discount to {max_discount_val} ({ai_res.get('reason')})"
+                audit_reason = f"AI adjusted discount to {corrected_discount} ({ai_res.get('reason')})"
                 
                 # Self-improve DB: Update the coupon value so future runs don't need AI call
                 if self.db:
                     try:
-                        await self.db.db.execute(
-                            """
+                        gen_type = ai_res.get("general_discount_type", ai_res.get("discount_type", "FLAT"))
+                        gen_val = ai_res.get("general_discount_value", ai_res.get("applicable_discount_value", 0.0))
+                        gen_max = ai_res.get("general_max_discount")
+                        gen_min = ai_res.get("general_min_booking_value")
+                        
+                        # Dynamically check columns to support mock db structure in tests
+                        async with self.db.db.execute("PRAGMA table_info(coupons)") as cur:
+                            columns = [row["name"] for row in await cur.fetchall()]
+                        
+                        update_fields = ["discount_type = ?", "discount_value = ?", "updated_at = CURRENT_TIMESTAMP"]
+                        update_params = [gen_type, gen_val]
+                        
+                        if "max_discount" in columns and gen_max is not None:
+                            update_fields.append("max_discount = ?")
+                            update_params.append(gen_max)
+                        if "min_booking_value" in columns and gen_min is not None:
+                            update_fields.append("min_booking_value = ?")
+                            update_params.append(gen_min)
+                            
+                        query = f"""
                             UPDATE coupons SET 
-                                discount_type = ?,
-                                discount_value = ?,
-                                updated_at = CURRENT_TIMESTAMP
+                                {', '.join(update_fields)}
                             WHERE platform = ? AND code = ?
-                            """,
-                            (ai_type, ai_val, platform, coupon_code)
-                        )
+                        """
+                        update_params.extend([platform, coupon_code])
+                        
+                        await self.db.db.execute(query, tuple(update_params))
                         await self.db.db.commit()
-                        logger.success(f"[CouponInstinctsEngine] Corrected coupon {coupon_code} parameters in DB: val={ai_val}, type={ai_type}.")
+                        logger.success(f"[CouponInstinctsEngine] Corrected coupon {coupon_code} parameters in DB: val={gen_val}, type={gen_type}.")
                     except Exception as e:
                         logger.error(f"Failed to update coupon in DB: {e}")
 

@@ -59,3 +59,20 @@ def test_flight_coupon_filtering():
     assert is_flight_coupon("TAKEITALL", "Get Rs 100 cashback on a successful mobile recharge") is False
     assert is_flight_coupon("BUSOTT", "Travel in a bus at the best prices Also, get 38+ OTT subscription") is False
 
+def test_is_coupon_airline_match():
+    from dispatcher import is_coupon_airline_match
+    
+    # 1. Coupon doesn't mention airline -> globally applicable
+    assert is_coupon_airline_match("Flat Rs 500 off on all flight bookings", "IndiGo") is True
+    assert is_coupon_airline_match("Flat Rs 500 off on all flight bookings", "SpiceJet") is True
+    
+    # 2. Coupon mentions IndiGo
+    assert is_coupon_airline_match("Flat 10% off on IndiGo flights", "IndiGo") is True
+    assert is_coupon_airline_match("Flat 10% off on IndiGo flights", "6E-201") is True
+    assert is_coupon_airline_match("Flat 10% off on IndiGo flights", "SpiceJet") is False
+    
+    # 3. Coupon mentions SpiceJet or Akasa
+    assert is_coupon_airline_match("Get Rs. 1000 off on SpiceJet & Akasa Air bookings", "SpiceJet") is True
+    assert is_coupon_airline_match("Get Rs. 1000 off on SpiceJet & Akasa Air bookings", "Akasa Air") is True
+    assert is_coupon_airline_match("Get Rs. 1000 off on SpiceJet & Akasa Air bookings", "IndiGo") is False
+

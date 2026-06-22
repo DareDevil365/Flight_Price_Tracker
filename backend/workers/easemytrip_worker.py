@@ -51,27 +51,34 @@ class EaseMyTripWorker(BaseWorker):
 
     def find_value_by_keys(self, d, keys, default=None):
         for key in keys:
-            val = self._find_key_recursive(d, key)
+            val = self._find_key_bfs(d, key)
             if val is not None:
                 return val
         return default
 
-    def _find_key_recursive(self, d, target_key):
+    def _find_key_bfs(self, d, target_key):
         if not isinstance(d, dict):
             return None
-        if target_key in d:
-            return d[target_key]
-        for k, v in d.items():
-            if isinstance(v, dict):
-                res = self._find_key_recursive(v, target_key)
-                if res is not None:
-                    return res
-            elif isinstance(v, list):
-                for item in v:
-                    if isinstance(item, dict):
-                        res = self._find_key_recursive(item, target_key)
-                        if res is not None:
-                            return res
+        
+        queue = [(d, None)]
+        blacklist = {"tax", "taxes", "taxdetails", "tax_details", "fee", "fees", "conveniencefee", "charge", "charges", "seat", "extra"}
+        
+        while queue:
+            curr, parent = queue.pop(0)
+            if not isinstance(curr, dict):
+                continue
+            
+            if target_key in curr:
+                parent_lower = str(parent).lower() if parent else ""
+                if not any(b in parent_lower for b in blacklist):
+                    return curr[target_key]
+            
+            for k, v in curr.items():
+                k_lower = str(k).lower()
+                if any(b in k_lower for b in blacklist):
+                    continue
+                if isinstance(v, dict):
+                    queue.append((v, k))
         return None
 
     def find_numeric_by_keys(self, d, keys):
@@ -405,7 +412,7 @@ class EaseMyTripWorker(BaseWorker):
                 const text = card.innerText || "";
                 if (!text.includes("₹") && !text.includes("Rs") && !text.toLowerCase().includes("book") && !text.toLowerCase().includes("lock")) continue;
 
-                const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+                const lines = text.split('\\n').map(l => l.trim()).filter(l => l.length > 0);
                 if (lines.length < 3) continue;
 
                 // Extract Price
@@ -503,7 +510,7 @@ class EaseMyTripWorker(BaseWorker):
                 }
 
                 // Extract real flight number from card text or generate deterministically
-                const flightNumRegex = /\b(6E|AI|UK|SG|QP|I5|IX|S5|2T|G8)\s*[-]?\s*(\d{3,4})\b/i;
+                const flightNumRegex = /\\b(6E|AI|UK|SG|QP|I5|IX|S5|2T|G8)\\s*[-]?\\s*(\\d{3,4})\\b/i;
                 const fnMatch = text.match(flightNumRegex);
                 let flight_number = "";
                 if (fnMatch) {

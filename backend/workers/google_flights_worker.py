@@ -96,7 +96,7 @@ class GoogleFlightsWorker(BaseWorker):
                 // Row must contain currency marker to represent a flight price
                 if (!text.includes("₹") && !text.includes("$") && !text.includes("Rs") && !text.toLowerCase().includes("book") && !text.toLowerCase().includes("lock")) continue;
 
-                const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+                const lines = text.split('\\n').map(l => l.trim()).filter(l => l.length > 0);
                 if (lines.length < 3) continue;
 
                 // Extract Price
@@ -202,7 +202,7 @@ class GoogleFlightsWorker(BaseWorker):
                 }
 
                 // Extract real flight number from card text or generate deterministically
-                const flightNumRegex = /\b(6E|AI|UK|SG|QP|I5|IX|S5|2T|G8)\s*[-]?\s*(\d{3,4})\b/i;
+                const flightNumRegex = /\\b(6E|AI|UK|SG|QP|I5|IX|S5|2T|G8)\\s*[-]?\\s*(\\d{3,4})\\b/i;
                 const fnMatch = text.match(flightNumRegex);
                 let flight_number = "";
                 if (fnMatch) {
