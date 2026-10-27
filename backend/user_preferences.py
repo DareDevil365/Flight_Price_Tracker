@@ -18,7 +18,9 @@ class UserPreferences:
         """Record a search event for pattern learning."""
         try:
             conn = self.db.db
-            dep_date = trip.get("departure_date", "")
+
+            # Support both camelCase departureDate and snake_case departure_date
+            dep_date = trip.get("departure_date") or trip.get("departureDate", "")
             dep_dt = None
             dep_dow = None
             dep_month = None
@@ -33,11 +35,20 @@ class UserPreferences:
                 except Exception:
                     pass
             
+            # Extract 3-letter IATA code if origin/destination are dictionaries
+            origin = trip.get("origin", "")
+            if isinstance(origin, dict):
+                origin = origin.get("code") or origin.get("iata") or origin.get("airportCode", "")
+
+            dest = trip.get("destination", "")
+            if isinstance(dest, dict):
+                dest = dest.get("code") or dest.get("iata") or dest.get("airportCode", "")
+
             await conn.execute("""
                 INSERT INTO search_patterns 
                 (search_id, origin, destination, departure_date, departure_dow, departure_month, days_advance)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (search_id, trip.get("origin", ""), trip.get("destination", ""), 
+            """, (search_id, origin, dest,
                   dep_date, dep_dow, dep_month, days_advance))
             await conn.commit()
         except Exception as e:

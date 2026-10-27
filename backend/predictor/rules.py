@@ -97,6 +97,10 @@ class Layer1RulesEngine:
         r10_buy_activation = f_oil_shock if oil_price_change_7d_pct > 0 else 0.0
         r10_wait_activation = f_oil_shock if oil_price_change_7d_pct < 0 else 0.0
 
+        # 11. Fuzzy Rule 11: Railway Waitlist Pressure (Train waitlists spilling into flight demand)
+        irctc_pressure = features.get("irctc_railway_pressure_index", 0.0)
+        r11_activation = irctc_pressure
+
         # Define rules configuration
         rules = [
             {
@@ -175,6 +179,13 @@ class Layer1RulesEngine:
                 "signal": "WAIT",
                 "urgency": "LOW",
                 "message": f"Brent crude oil dropped {abs(oil_price_change_7d_pct):.1f}% this week. Airline fuel surcharges may decrease. Consider waiting 1-2 weeks. (Activation: {int(r10_wait_activation * 100)}%)"
+            },
+            {
+                "name": "Railway Waitlist Pressure Rule",
+                "activation": r11_activation,
+                "signal": "BUY_NOW",
+                "urgency": "MEDIUM",
+                "message": f"High train waitlist pressure (Index: {irctc_pressure:.2f}). Alternate rail options are saturated, spelling spillover demand for flights. Lock in current fare. (Activation: {int(r11_activation * 100)}%)"
             },
         ]
 

@@ -24,8 +24,17 @@ Thumbs.db
 logs/
 *.log
 debug_search.png
-.gemini/
+.gemini/*
+!.gemini/context.md
 
 # Frontend
 frontend/dist/
 frontend/build/
+
+# Local runtime and personal browser/settings data
+.venv/
+config/
+backend/config/
+sessions/
+*.db-wal
+*.db-shm

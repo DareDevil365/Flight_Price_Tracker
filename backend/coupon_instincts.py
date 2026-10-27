@@ -91,8 +91,7 @@ class CouponInstinctsEngine:
         Do not wrap in markdown or backticks.
         """
         
-        try:
-            client, model, key_str = api_key_manager.get_client("brute")
+        async def make_call(client, model):
             logger.info(f"[CouponInstinctsEngine] Analyzing coupon {coupon_code} with model {model}...")
             response = await client.chat.completions.create(
                 model=model,
@@ -104,7 +103,10 @@ class CouponInstinctsEngine:
             )
             res_text = response.choices[0].message.content.strip()
             clean_res = res_text.replace("```json", "").replace("```", "").strip()
-            result = json.loads(clean_res)
+            return json.loads(clean_res)
+
+        try:
+            result = await api_key_manager.execute_with_retry("brute", make_call)
             logger.info(f"[CouponInstinctsEngine] AI analysis result for {coupon_code}: {result}")
             return result
         except Exception as e:

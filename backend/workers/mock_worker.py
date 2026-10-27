@@ -167,6 +167,18 @@ class MockWorker(BaseWorker):
         self._current_price = flight["base_price"]
         self._baseline_price = flight["base_price"]
 
+        # Randomize labels/attributes to test self-healing
+        fname_label = random.choice(["First Name", "Given Name", "Fname", "First-Name", "Name"])
+        lname_label = random.choice(["Last Name", "Family Name", "Surname", "Lname", "Last-Name"])
+        email_label = random.choice(["Email", "E-mail", "Email Address", "Email_Address", "Mail"])
+
+        fname_id = random.choice(["fname", "given_name", "first_name", "input-fname", "name_first"])
+        lname_id = random.choice(["lname", "family_name", "last_name", "input-lname", "name_last"])
+        email_id = random.choice(["email", "email_address", "mail_addr", "input-email", "user_email"])
+
+        btn_label = random.choice(["Proceed to Add-ons", "Continue", "Proceed", "Next", "Confirm Details"])
+        btn_id = random.choice(["passenger-btn", "submit-passenger", "continue-btn", "next-step"])
+
         html = f"""
         <html>
         <head>
@@ -186,18 +198,18 @@ class MockWorker(BaseWorker):
                 <h1>🛫 MockBooking.com - Passenger Details</h1>
                 <div class="status-badge">Phase 3: Passenger Info</div>
                 <div class="field">
-                    <label>First Name</label>
-                    <input type="text" id="fname" value="">
+                    <label>{fname_label}</label>
+                    <input type="text" id="{fname_id}" name="{fname_id}" placeholder="e.g. Raj" value="">
                 </div>
                 <div class="field">
-                    <label>Last Name</label>
-                    <input type="text" id="lname" value="">
+                    <label>{lname_label}</label>
+                    <input type="text" id="{lname_id}" name="{lname_id}" placeholder="e.g. Kumar" value="">
                 </div>
                 <div class="field">
-                    <label>Email</label>
-                    <input type="email" id="email" value="">
+                    <label>{email_label}</label>
+                    <input type="email" id="{email_id}" name="{email_id}" placeholder="e.g. raj@example.com" value="">
                 </div>
-                <button id="passenger-btn">Proceed to Add-ons</button>
+                <button id="{btn_id}">{btn_label}</button>
             </div>
         </body>
         </html>
@@ -206,31 +218,33 @@ class MockWorker(BaseWorker):
         await asyncio.sleep(1.0)
 
     async def fill_passenger_details(self, page) -> None:
-        logger.info("[MockWorker] Filling dummy passenger details...")
-        await page.fill("#fname", "Raj")
+        logger.info("[MockWorker] Filling dummy passenger details semantically...")
+        await self.fill_input_semantically(page, "first name", "Raj")
         await asyncio.sleep(0.3)
-        await page.fill("#lname", "Kumar")
+        await self.fill_input_semantically(page, "last name", "Kumar")
         await asyncio.sleep(0.3)
-        await page.fill("#email", "raj.kumar@example.com")
+        await self.fill_input_semantically(page, "email", "raj.kumar@example.com")
         await asyncio.sleep(0.5)
-        await page.click("#passenger-btn")
+        await self.click_button_semantically(page, "continue")
 
     async def skip_addons(self, page) -> None:
         logger.info("[MockWorker] Skipping addons...")
+        skip_btn_label = random.choice(["Skip & Continue", "No thanks", "No, thanks", "Proceed without", "Not now", "Skip"])
+        skip_btn_id = random.choice(["skip-btn", "no-thanks-btn", "skip-addons", "proceed-no-addon"])
         # Simulate simple addon screen
-        html = """
+        html = f"""
         <html>
         <body style="background: #0f172a; color: white; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh;">
             <div style="text-align: center;">
                 <h2>Add Extras? (Insurance, Meals)</h2>
-                <button id="skip-btn" style="padding: 10px 20px; background: #475569; border: none; color: white; border-radius: 6px; cursor: pointer;">Skip & Continue</button>
+                <button id="{skip_btn_id}" style="padding: 10px 20px; background: #475569; border: none; color: white; border-radius: 6px; cursor: pointer;">{skip_btn_label}</button>
             </div>
         </body>
         </html>
         """
         await page.set_content(html)
         await asyncio.sleep(0.5)
-        await page.click("#skip-btn")
+        await self.click_button_semantically(page, "skip")
 
     async def proceed_to_checkout(self, page) -> None:
         logger.info("[MockWorker] Proceeding to checkout...")

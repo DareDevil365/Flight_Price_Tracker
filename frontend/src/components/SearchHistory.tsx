@@ -6,13 +6,14 @@ import { useHistoryStore } from "../store";
 import type { SearchHistoryItem, SearchResult } from "../types";
 
 interface SearchHistoryProps {
-  sendMessage: (type: string, payload: any) => void;
+  sendMessage: (type: string, payload: Record<string, unknown>) => void;
 }
 
 export default function SearchHistory({ sendMessage }: SearchHistoryProps) {
   const history = useHistoryStore((s) => s.history);
   const searchResultsMap = useHistoryStore((s) => s.searchResults);
-  const [selectedSearch, setSelectedSearch] = useState<SearchHistoryItem | null>(null);
+  const [selectedSearchId, setSelectedSearchId] = useState<string | null>(null);
+  const selectedSearch = history.find(search=>search.id===selectedSearchId) || null;
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
@@ -29,7 +30,7 @@ export default function SearchHistory({ sendMessage }: SearchHistoryProps) {
   };
 
   const handleSelectSearch = (search: SearchHistoryItem) => {
-    setSelectedSearch(search);
+    setSelectedSearchId(search.id);
     sendMessage("search:history:results:get", { searchId: search.id });
   };
 
@@ -78,7 +79,7 @@ export default function SearchHistory({ sendMessage }: SearchHistoryProps) {
       <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <h1 className="page-title">Search & Execution History</h1>
-          <p className="page-subtitle">Track past coupon brute force execution logs, success rates, and saved deals.</p>
+          <p className="page-subtitle">Review recorded flight searches, listed fares and checkout coupon evidence.</p>
         </div>
         <button
           className="btn btn-secondary flex-row gap-xs"
@@ -201,7 +202,7 @@ export default function SearchHistory({ sendMessage }: SearchHistoryProps) {
 
               {/* Flight Results */}
               <div className="flex-col gap-sm">
-                <span className="form-label" style={{ fontSize: 11 }}>Verified Flights Found ({selectedResults.length})</span>
+                <span className="form-label" style={{ fontSize: 11 }}>Recorded flight results ({selectedResults.length}) · {selectedResults.filter(r=>r.savings_breakdown?.verification==='checkout').length} recorded checkout totals</span>
                 
                 {selectedSearch.status === "running" && (
                   <div className="glass-card flex-row gap-sm" style={{ padding: 16, borderLeft: "4px solid hsl(var(--color-primary))" }}>
@@ -217,9 +218,9 @@ export default function SearchHistory({ sendMessage }: SearchHistoryProps) {
                   <div className="glass-card flex-row gap-sm" style={{ padding: 16, borderLeft: "4px solid hsl(var(--color-error))" }}>
                     <XCircle size={16} className="text-error" />
                     <div>
-                      <div style={{ fontWeight: 600, fontSize: 13 }}>Brute Force Failed</div>
+                      <div style={{ fontWeight: 600, fontSize: 13 }}>Search failed</div>
                       <div style={{ fontSize: 11, color: "hsl(var(--text-secondary))" }}>
-                        All bot execution attempts failed due to navigation blocks (e.g. anti-bot HTTP/2 protocol resets) or missing search availability.
+                        No usable results were recorded. Review the search logs for the actual error before retrying.
                       </div>
                     </div>
                   </div>
@@ -246,8 +247,7 @@ export default function SearchHistory({ sendMessage }: SearchHistoryProps) {
                 )}
 
                 {selectedResults.map((result) => {
-                  const dealText = result.deal_score >= 85 ? "EXCEPTIONAL" : result.deal_score >= 70 ? "GOOD" : "AVERAGE";
-                  const dealClass = result.deal_score >= 85 ? "exceptional" : result.deal_score >= 70 ? "good" : "average";
+                  const verified = result.savings_breakdown?.verification === 'checkout';
                   
                   return (
                     <div key={result.id} className="glass-card module-card" style={{ padding: 16 }}>
@@ -264,14 +264,14 @@ export default function SearchHistory({ sendMessage }: SearchHistoryProps) {
                           </span>
                         </div>
                         <div style={{ textAlign: "right" }}>
-                          <div className={`deal-score ${dealClass}`} style={{ marginBottom: 4 }}>
-                            {result.deal_score}/100 ({dealText})
+                          <div className="badge badge-neutral" style={{ marginBottom: 4 }}>
+                            {verified ? 'Recorded checkout total' : 'Listed or legacy fare — reverify'}
                           </div>
                           <div className="price-original">
                             ₹{result.base_price.toLocaleString("en-IN")}
                           </div>
                           <div className="price-final">
-                            ₹{result.effective_price.toLocaleString("en-IN")}
+                            ₹{result.final_price.toLocaleString("en-IN")}
                           </div>
                         </div>
                       </div>

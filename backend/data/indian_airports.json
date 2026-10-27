@@ -1,0 +1,993 @@
+{
+  "source_url": "https://davidmegginson.github.io/ourairports-data/airports.csv",
+  "observed_at": "2026-10-08T17:55:15.078983+00:00",
+  "source_sha256": "06bb430e3929969865065798765beaab4063e4695fbb32d83623b103a613e78f",
+  "license": "Public domain",
+  "scope": "Indian airports with IATA codes. Location reference only, not proof of current bookable service.",
+  "airports": [
+    {
+      "code": "AGR",
+      "name": "Agra Airport / Agra Air Force Station",
+      "city": "Agra",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "AGX",
+      "name": "Agatti Airport",
+      "city": "Agatti",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "AHA",
+      "name": "Maa Mahamaya Airport",
+      "city": "Ambikapur",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "AIP",
+      "name": "Adampur Airport",
+      "city": "Adampur",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "AJL",
+      "name": "Lengpui Airport",
+      "city": "Aizawl (Lengpui)",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "AKD",
+      "name": "Akola Airport",
+      "city": "Akola",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "AMD",
+      "name": "Sardar Vallabh Patel International Airport",
+      "city": "Ahmedabad",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "ATQ",
+      "name": "Sri Guru Ram Das Ji International Airport",
+      "city": "Amritsar",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "AVR",
+      "name": "Amravati  Airport",
+      "city": "Amravati",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "AYJ",
+      "name": "Maharshi Valmiki International Airport",
+      "city": "Faizabad",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "AZH",
+      "name": "Azamgarh Airport",
+      "city": "Azamgarh",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "BBI",
+      "name": "Biju Patnaik International Airport",
+      "city": "Bhubaneswar",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "BDQ",
+      "name": "Vadodara International Airport",
+      "city": "Vadodara",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "BEK",
+      "name": "Bareilly Air Force Station",
+      "city": "Bareilly",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "BEP",
+      "name": "Bellary Airport",
+      "city": "Bellary",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "BHJ",
+      "name": "Bhuj Airport",
+      "city": "Bhuj",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "BHO",
+      "name": "Raja Bhoj International Airport",
+      "city": "Bhopal",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "BHU",
+      "name": "Bhavnagar Airport",
+      "city": "Bhavnagar",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "BKB",
+      "name": "Nal Airport",
+      "city": "Bikaner",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "BLR",
+      "name": "Kempegowda International Airport Bengaluru",
+      "city": "Bengaluru",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "BOM",
+      "name": "Chhatrapati Shivaji Maharaj International Airport",
+      "city": "Mumbai",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "BPM",
+      "name": "Begumpet Airport",
+      "city": "Hyderabad",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "BUP",
+      "name": "Bhatinda Air Force Station",
+      "city": "",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "CBD",
+      "name": "Car Nicobar Air Force Base",
+      "city": "IAF Camp",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "CCJ",
+      "name": "Calicut International Airport",
+      "city": "Calicut",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "CCU",
+      "name": "Netaji Subhash Chandra Bose International Airport",
+      "city": "Kolkata",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "CDP",
+      "name": "Kadapa Airport",
+      "city": "Kadapa",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "CJB",
+      "name": "Coimbatore International Airport",
+      "city": "Coimbatore",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "CNN",
+      "name": "Kannur International Airport",
+      "city": "Kannur",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "COH",
+      "name": "Cooch Behar Airport",
+      "city": "Cooch Behar",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "COK",
+      "name": "Cochin International Airport",
+      "city": "Kochi",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "CWK",
+      "name": "Chitrakoot Airport",
+      "city": "Chitrakoot",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "DBD",
+      "name": "Dhanbad Airport",
+      "city": "",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "DBR",
+      "name": "Darbhanga Airport",
+      "city": "Darbhanga",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "DED",
+      "name": "Dehradun Jolly Grant Airport",
+      "city": "Dehradun (Jauligrant)",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "DEL",
+      "name": "Indira Gandhi International Airport",
+      "city": "New Delhi",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "DEP",
+      "name": "Daporijo Airport",
+      "city": "Daporijo",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "DGH",
+      "name": "Deoghar Airport",
+      "city": "Deoghar",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "DHM",
+      "name": "Kangra Airport",
+      "city": "Kangra",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "DIB",
+      "name": "Dibrugarh Airport",
+      "city": "Dibrugarh",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "DIU",
+      "name": "Diu Airport",
+      "city": "Diu",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "DMU",
+      "name": "Dimapur Airport",
+      "city": "Dimapur",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "DXN",
+      "name": "Noida International Airport",
+      "city": "Gautam Buddha Nagar",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "GAU",
+      "name": "Lokpriya Gopinath Bordoloi International Airport",
+      "city": "Guwahati",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "GAY",
+      "name": "Gaya Airport",
+      "city": "Gaya",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "GBI",
+      "name": "Kalaburagi Airport",
+      "city": "Kalaburagi",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "GDB",
+      "name": "Gondia Airport",
+      "city": "Gondia",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "GOI",
+      "name": "Goa Dabolim International Airport",
+      "city": "Vasco da Gama",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "GOP",
+      "name": "Gorakhpur Airport",
+      "city": "Gorakhpur",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "GOX",
+      "name": "Manohar International Airport",
+      "city": "Mopa",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "GUX",
+      "name": "Guna Airport",
+      "city": "",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "GWL",
+      "name": "Gwalior Airport",
+      "city": "Gwalior",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "HBX",
+      "name": "Hubballi Airport",
+      "city": "Hubballi",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "HDO",
+      "name": "Hindon Airport / Hindon Air Force Station",
+      "city": "Ghaziabad",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "HGI",
+      "name": "Itanagar Donyi Polo Hollongi Airport",
+      "city": "Hollongi",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "HJR",
+      "name": "Khajuraho Airport",
+      "city": "Khajuraho",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "HRH",
+      "name": "Aligarh Airport",
+      "city": "Aligarh",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "HSR",
+      "name": "Rajkot International Airport",
+      "city": "Rajkot",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "HSS",
+      "name": "Maharaja Agrasen International Airport",
+      "city": "Hisar",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "HWR",
+      "name": "Halwara International Airport",
+      "city": "Halwara",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "HYD",
+      "name": "Rajiv Gandhi International Airport",
+      "city": "Hyderabad",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IDR",
+      "name": "Devi Ahilya Bai Holkar International Airport",
+      "city": "Indore",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IMF",
+      "name": "Bir Tikendrajit International Airport",
+      "city": "Imphal",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "ISK",
+      "name": "Nashik International Airport",
+      "city": "Nashik",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IXA",
+      "name": "Agartala - Maharaja Bir Bikram Airport",
+      "city": "Agartala",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IXB",
+      "name": "Bagdogra Airport",
+      "city": "Siliguri",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IXC",
+      "name": "Shaheed Bhagat Singh International Airport",
+      "city": "Chandigarh",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IXD",
+      "name": "Prayagraj Airport",
+      "city": "Allahabad",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IXE",
+      "name": "Mangaluru International Airport",
+      "city": "Mangaluru",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IXG",
+      "name": "Belagavi Airport",
+      "city": "Belgaum",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IXH",
+      "name": "Kailashahar Airport",
+      "city": "Kailashahar",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "IXI",
+      "name": "Lilabari North Lakhimpur Airport",
+      "city": "Lilabari",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IXJ",
+      "name": "Jammu Airport",
+      "city": "Jammu",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IXK",
+      "name": "Keshod Airport",
+      "city": "Keshod",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IXL",
+      "name": "Leh Kushok Bakula Rimpochee Airport",
+      "city": "Leh",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IXM",
+      "name": "Madurai Airport",
+      "city": "Madurai",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IXN",
+      "name": "Khowai Airport",
+      "city": "Khowai",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "IXP",
+      "name": "Pathankot Airport",
+      "city": "Pathankot",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IXQ",
+      "name": "Kamalpur Airport",
+      "city": "Manik Bhandar",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "IXR",
+      "name": "Birsa Munda Airport",
+      "city": "Ranchi",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IXS",
+      "name": "Silchar Airport",
+      "city": "Silchar",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IXT",
+      "name": "Pasighat Airport",
+      "city": "Pasighat",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "IXU",
+      "name": "Aurangabad Airport",
+      "city": "Aurangabad",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IXV",
+      "name": "Along Airport",
+      "city": "",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "IXW",
+      "name": "Sonari Airport",
+      "city": "Jamshedpur",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "IXX",
+      "name": "Bidar Airport / Bidar Air Force Station",
+      "city": "Bidar",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "IXY",
+      "name": "Kandla Airport",
+      "city": "Kandla",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "IXZ",
+      "name": "Veer Savarkar International Airport / INS Utkrosh",
+      "city": "Port Blair",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "JAI",
+      "name": "Jaipur International Airport",
+      "city": "Jaipur",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "JDH",
+      "name": "Jodhpur Airport",
+      "city": "Jodhpur",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "JGA",
+      "name": "Jamnagar Airport",
+      "city": "Jamnagar",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "JGB",
+      "name": "Jagdalpur Airport",
+      "city": "Jagdalpur",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "JLG",
+      "name": "Jalgaon Airport",
+      "city": "Jalgaon",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "JLR",
+      "name": "Jabalpur Airport",
+      "city": "Jabalpur",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "JRG",
+      "name": "Jharsuguda Airport",
+      "city": "",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "JRH",
+      "name": "Jorhat Airport",
+      "city": "Jorhat",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "JSA",
+      "name": "Jaisalmer Airport",
+      "city": "",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "KBK",
+      "name": "Kushinagar International Airport",
+      "city": "Kushinagar",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "KJB",
+      "name": "Kurnool Airport",
+      "city": "Orvakal",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "KLH",
+      "name": "Kolhapur Airport",
+      "city": "Kolhapur",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "KNU",
+      "name": "Kanpur Airport",
+      "city": "Kanpur",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "KQH",
+      "name": "Kishangarh Airport Ajmer",
+      "city": "Ajmer (Kishangarh)",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "KTU",
+      "name": "Kota Airport",
+      "city": "Kota",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "KUU",
+      "name": "Kullu Manali Airport",
+      "city": "Bhuntar",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "LDA",
+      "name": "Malda Airport",
+      "city": "Malda",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "LKO",
+      "name": "Chaudhary Charan Singh International Airport",
+      "city": "Lucknow",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "LTU",
+      "name": "Murod Kond Airport",
+      "city": "Latur",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "LUH",
+      "name": "Ludhiana Airport",
+      "city": "",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "MAA",
+      "name": "Chennai International Airport",
+      "city": "Chennai",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "MYQ",
+      "name": "Mysore Airport",
+      "city": "Mysore",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "MZS",
+      "name": "Moradabad Airport",
+      "city": "Moradabad",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "MZU",
+      "name": "Muzaffarpur Airport",
+      "city": "Muzaffarpur",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "NAG",
+      "name": "Dr. Babasaheb Ambedkar International Airport",
+      "city": "Nagpur",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "NDC",
+      "name": "Nanded Airport",
+      "city": "Nanded",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "NMB",
+      "name": "Daman Airport",
+      "city": "Daman",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "NMI",
+      "name": "Navi Mumbai International Airport",
+      "city": "Navi Mumbai",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "NVY",
+      "name": "Neyveli Airport",
+      "city": "Neyveli",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "PAB",
+      "name": "Bilaspur Airport",
+      "city": "Bilaspur",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "PAT",
+      "name": "Jay Prakash Narayan Airport",
+      "city": "Patna",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "PBD",
+      "name": "Porbandar Airport",
+      "city": "Porbandar",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "PGH",
+      "name": "Pantnagar Airport",
+      "city": "Pantnagar",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "PNQ",
+      "name": "Pune International Airport",
+      "city": "Pune",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "PNY",
+      "name": "Pondicherry Airport",
+      "city": "Puducherry (Pondicherry)",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "PUT",
+      "name": "Sri Sathya Sai Airport",
+      "city": "Puttaparthi",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "PYB",
+      "name": "Jeypore Airport",
+      "city": "Jeypore",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "PYG",
+      "name": "Pakyong Airport",
+      "city": "Pakyong",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "RAJ",
+      "name": "Rajkot Airport",
+      "city": "Rajkot",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "RDP",
+      "name": "Kazi Nazrul Islam Airport",
+      "city": "Durgapur",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "REW",
+      "name": "Rewa Airport, Chorhata, REWA",
+      "city": "Rewa",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "RGH",
+      "name": "Balurghat Airport",
+      "city": "Balurghat",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "RJA",
+      "name": "Rajahmundry Airport",
+      "city": "Madhurapudi",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "RJI",
+      "name": "Rajouri Airport",
+      "city": "Rajouri",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "RMD",
+      "name": "Basanth Nagar Airport",
+      "city": "Ramagundam",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "RPR",
+      "name": "Swami Vivekananda Airport",
+      "city": "Raipur",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "RQY",
+      "name": "Rashtrakavi Kuvempu Airport",
+      "city": "Shimoga",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "RRK",
+      "name": "Rourkela Airport",
+      "city": "Rourkela",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "RTC",
+      "name": "Ratnagiri Airport",
+      "city": "",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "RUP",
+      "name": "Rupsi Airport",
+      "city": "Rupsi",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "SAG",
+      "name": "Shirdi International Airport",
+      "city": "Kakadi",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "SDW",
+      "name": "Sindhudurg Airport",
+      "city": "Chipi",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "SHL",
+      "name": "Shillong Airport",
+      "city": "Shillong",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "SLV",
+      "name": "Shimla Airport",
+      "city": "Jubbarhatti",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "SSE",
+      "name": "Solapur Airport",
+      "city": "Solapur",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "STV",
+      "name": "Surat International Airport",
+      "city": "Surat",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "SWN",
+      "name": "Sarsawa Air Force Station",
+      "city": "Sherpur Naqeebpur",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "SXR",
+      "name": "Srinagar International Airport",
+      "city": "Srinagar",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "SXV",
+      "name": "Salem Airport",
+      "city": "Salem",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "TCR",
+      "name": "Tuticorin Airport",
+      "city": "Vagaikulam",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "TEI",
+      "name": "Tezu Airport",
+      "city": "Tezu",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "TEZ",
+      "name": "Tezpur Airport",
+      "city": "",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "TIR",
+      "name": "Tirupati International Airport",
+      "city": "Tirupati",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "TJV",
+      "name": "Thanjavur Air Force Station",
+      "city": "Thanjavur",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "TNI",
+      "name": "Satna Airport",
+      "city": "",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "TRV",
+      "name": "Thiruvananthapuram International Airport",
+      "city": "Thiruvananthapuram",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "TRZ",
+      "name": "Tiruchirappalli International Airport",
+      "city": "Tiruchirappalli",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "UDR",
+      "name": "Maharana Pratap Airport",
+      "city": "Udaipur",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "UKE",
+      "name": "Utkela Airport",
+      "city": "Bhawanipatna",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "VDY",
+      "name": "Jindal Vijaynagar Airport",
+      "city": "Toranagallu",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "VGA",
+      "name": "Vijayawada International Airport",
+      "city": "Vijayawada",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "VNS",
+      "name": "Lal Bahadur Shastri International Airport",
+      "city": "Varanasi",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "VSV",
+      "name": "Shravasti Airport",
+      "city": "Shravasti",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "VTZ",
+      "name": "Alluri Sitarama Raju International Airport (Vizag)",
+      "city": "Visakhapatnam",
+      "scheduled_service": "yes"
+    },
+    {
+      "code": "WGC",
+      "name": "Warangal Airport",
+      "city": "Warangal",
+      "scheduled_service": "no"
+    },
+    {
+      "code": "ZER",
+      "name": "Ziro Airport",
+      "city": "Ziro",
+      "scheduled_service": "no"
+    }
+  ]
+}

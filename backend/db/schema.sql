@@ -335,3 +335,47 @@ CREATE TABLE IF NOT EXISTS process_journal (
 
 CREATE INDEX IF NOT EXISTS idx_journal_category ON process_journal(category, recorded_at);
 
+
+
+-- Comparable real quotes, separate from legacy seeded history.
+CREATE TABLE IF NOT EXISTS fare_quotes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, route TEXT NOT NULL, departure_date TEXT NOT NULL,
+    airline TEXT, flight_number TEXT, platform TEXT NOT NULL, passenger_count INTEGER NOT NULL,
+    cabin_class TEXT NOT NULL, price REAL NOT NULL CHECK(price > 0),
+    verification TEXT NOT NULL CHECK(verification IN ('listed','checkout')),
+    observed_at TEXT NOT NULL, coupon_code TEXT,
+    quality_status TEXT NOT NULL DEFAULT 'legacy_unchecked', departure_time TEXT,stops INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_fare_quotes_trip ON fare_quotes(route,departure_date,passenger_count,cabin_class,observed_at);
+
+CREATE TABLE IF NOT EXISTS intelligence_cache (key TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS offer_observations (
+ id INTEGER PRIMARY KEY, platform TEXT, code TEXT, description TEXT, valid_from TEXT,
+ valid_until TEXT, source_url TEXT, observed_day TEXT,
+ UNIQUE(platform,code,description,observed_day));
+CREATE TABLE IF NOT EXISTS red_room (
+ id TEXT PRIMARY KEY, request TEXT NOT NULL, interval_hours INTEGER NOT NULL,
+ created_at TEXT NOT NULL, last_checked TEXT, last_price REAL, report TEXT,
+ last_alert_key TEXT, is_active INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS live_offer_evidence (
+ platform TEXT NOT NULL, code TEXT NOT NULL, payload TEXT NOT NULL,
+ observed_at TEXT NOT NULL, PRIMARY KEY(platform,code));
+CREATE TABLE IF NOT EXISTS knowledge_sources (
+ id INTEGER PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, source_url TEXT NOT NULL,
+ published_at TEXT, observed_at TEXT NOT NULL, payload TEXT NOT NULL,
+ UNIQUE(kind,source_url,title));
+CREATE TABLE IF NOT EXISTS quote_quarantine (
+ result_id TEXT PRIMARY KEY, reasons TEXT NOT NULL, payload TEXT NOT NULL, observed_at TEXT NOT NULL);
+
+-- Scoped coupon trials are audit evidence, never global coupon guarantees or fare training.
+CREATE TABLE IF NOT EXISTS coupon_audit_runs (
+    id TEXT PRIMARY KEY, platform TEXT NOT NULL, search_id TEXT,
+    scope TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL,
+    completed_at TEXT, summary TEXT NOT NULL DEFAULT '{}'
+);
+CREATE TABLE IF NOT EXISTS coupon_audit_trials (
+    run_id TEXT NOT NULL REFERENCES coupon_audit_runs(id), ordinal INTEGER NOT NULL,
+    code TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL, observed_at TEXT NOT NULL,
+    PRIMARY KEY(run_id,ordinal)
+);
+CREATE INDEX IF NOT EXISTS idx_coupon_audit_platform ON coupon_audit_runs(platform,started_at);

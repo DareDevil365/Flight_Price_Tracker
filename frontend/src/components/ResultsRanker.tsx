@@ -1,631 +1,229 @@
-import { useState } from "react";
-import {
-  CheckCircle2, Tag, ChevronRight, Activity, Calendar, MapPin, Clock, Sun, Brain
-} from "lucide-react";
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell
-} from "recharts";
-import { useResultStore, useSearchStore } from "../store";
-import type { SearchResult } from "../types";
+import { useState, useEffect, useRef } from "react";
+import { useResultStore, useSearchStore, useBotStore } from "../store";
+import IntelligenceCard from "./IntelligenceCard";
+import GoogleBookingContext from './GoogleBookingContext';
+import type { SearchResult, PublishedOffer } from "../types";
 
-interface ResultsRankerProps {
-  sendMessage: (type: string, payload: any) => void;
-}
+interface Props { sendMessage: (type: string, payload: Record<string, unknown>) => void }
+const EMPTY_OFFERS: PublishedOffer[] = [];
+const money = (value: number) => "₹" + value.toLocaleString("en-IN", {maximumFractionDigits: 2});
+const verified = (r: SearchResult) => r.savings_breakdown?.verification === "checkout";
+const currentReceipt = (r: SearchResult, handoff:Record<string,string>, now:number) => {
+  if (!verified(r) || !r.session_id || handoff[r.session_id]!=='success') return false;
+  const observed=Date.parse(r.savings_breakdown?.observed_at || '');
+  return Number.isFinite(observed) && observed<=now+60_000 && now-observed<15*60_000;
+};
 
-export default function ResultsRanker({ sendMessage }: ResultsRankerProps) {
-  const results = useResultStore((s) => s.results);
-  const handoffStatus = useResultStore((s) => s.handoffStatus);
-  const setHandoffStatus = useResultStore((s) => s.setHandoffStatus);
-  const prediction = useResultStore((s) => s.prediction);
-  const suggestions = useResultStore((s) => s.suggestions);
-  const dateAlternatives = useResultStore((s) => s.dateAlternatives);
-  const highlightedFlightId = useResultStore((s) => s.highlightedFlightId);
-  const setHighlightedFlightId = useResultStore((s) => s.setHighlightedFlightId);
-  const updateTrip = useSearchStore((s) => s.updateTrip);
-  const setActiveTab = useSearchStore((s) => s.setActiveTab);
-  const searchStatus = useSearchStore((s) => s.status);
+export default function ResultsRanker({ sendMessage }: Props) {
+  const results = useResultStore(s => s.results);
+  const dealOptions=useResultStore(s=>s.dealOptions);
+  const [feedback,setFeedback]=useState('');
+  const [exploring,setExploring]=useState(false);
+  const [transferEstimate,setTransferEstimate]=useState(2000);
+  const alternatives=useResultStore(s=>s.alternatives);
+  useEffect(()=>{
+    const complete=()=>setExploring(false);
+    const failed=(event:Event)=>{
+      const payload=(event as CustomEvent).detail;
+      if(payload?.originalType==='search:explore') setExploring(false);
+      if(payload?.originalType==='coupon:refresh') useResultStore.getState().setOfferStatus('Offer refresh failed: '+(payload.message || 'Please retry.'));
+    };
+    const disconnected=()=>{
+      setExploring(false);
+      if(useResultStore.getState().offerStatus.startsWith('Refreshing')) useResultStore.getState().setOfferStatus('Offer refresh interrupted by connection loss. Reconnect and retry.');
+    };
+    window.addEventListener('alternatives_ready',complete);window.addEventListener('socket_disconnected',disconnected);window.addEventListener('request_error',failed);
+    return()=>{window.removeEventListener('alternatives_ready',complete);window.removeEventListener('socket_disconnected',disconnected);window.removeEventListener('request_error',failed);};
+  },[]);
+  const suggestions = useResultStore(s => s.suggestions);
+  const status = useSearchStore(s => s.status);
+  const handoff = useResultStore(s => s.handoffStatus);
+  const [receiptTime,setReceiptTime]=useState(Date.now);
+  useEffect(()=>{
+    if (!results.some(r=>verified(r) && r.session_id && handoff[r.session_id]==='success')) return;
+    const timer=setInterval(()=>setReceiptTime(Date.now()),30_000);
+    return()=>clearInterval(timer);
+  },[results,handoff]);
+  const checkoutStatus = useResultStore(s => s.checkoutStatus);
+  const failures = Object.values(useBotStore(s => s.botStatuses)).filter(s => s.phase==='failed');
+  const [code, setCode] = useState("");
+  const [couponSite, setCouponSite] = useState("cleartrip");
+  const [couponSaving,setCouponSaving]=useState(false);
+  const couponPending=useRef(false);
+  const [couponMessage,setCouponMessage]=useState('');
+  useEffect(()=>{
+    const added=(event:Event)=>{const p=(event as CustomEvent).detail;if(couponPending.current && p.platform===couponSite && p.code===code.trim()){couponPending.current=false;setCouponSaving(false);setCode('');setCouponMessage('Code saved. Actual savings still need verification.');}};
+    const failed=(event:Event)=>{const p=(event as CustomEvent).detail;if(p?.originalType==='coupon:add' && couponPending.current){couponPending.current=false;setCouponSaving(false);setCouponMessage(p.message || 'Coupon could not be saved.');}};
+    const disconnected=()=>{if(couponPending.current){couponPending.current=false;setCouponSaving(false);setCouponMessage('Connection lost. Check the coupon list before retrying.');}};
+    window.addEventListener('coupon_added',added);window.addEventListener('request_error',failed);window.addEventListener('socket_disconnected',disconnected);
+    return()=>{window.removeEventListener('coupon_added',added);window.removeEventListener('request_error',failed);window.removeEventListener('socket_disconnected',disconnected);};
+  },[couponSite,code]);
+  const offers = useResultStore(s=>s.offers[couponSite] || EMPTY_OFFERS);
+  const couponTrackRecord=useResultStore(s=>s.couponTrackRecord[couponSite]);
+  const offerStatus = useResultStore(s=>s.offerStatus);
+  useEffect(()=>{ sendMessage('coupon:list',{platform:couponSite}); },[couponSite,sendMessage]);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [showFlagged,setShowFlagged]=useState(false);
+  const flagged=results.filter(r=>r.savings_breakdown?.integrity?.status==='flagged');
+  const groups = ["outbound", "inbound"].map(direction => ({
+    direction,
+    rows: results.filter(r => !dealOptions?.excludedResultIds.includes(r.id) && (r.savings_breakdown?.direction || "outbound") === direction && (showFlagged || r.savings_breakdown?.integrity?.status!=='flagged'))
+      .sort((a,b) => Number(currentReceipt(b,handoff,Math.max(receiptTime,Date.now())))-Number(currentReceipt(a,handoff,Math.max(receiptTime,Date.now()))) || a.final_price-b.final_price)
+  })).filter(g => g.rows.length);
 
-  // Combine suggestions from store or fall back to legacy prediction-based suggestions
-  const activeSuggestions = suggestions ? {
-    suggestions: suggestions.suggestions || [],
-    timing_advice: {
-      advice: suggestions.verdict || "MONITOR",
-      text: suggestions.advice || "Hold or monitor prices."
-    }
-  } : (prediction ? {
-    suggestions: prediction.smart_suggestions || [],
-    timing_advice: {
-      advice: prediction.decision?.signal || prediction.prediction || "MONITOR",
-      text: prediction.decision?.reasoning || prediction.reasoning || "Hold or monitor prices."
-    }
-  } : null);
-
-
-  const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null);
-  const [activeSuggestionId, setActiveSuggestionId] = useState<number | null>(null);
-
-  const comboSuggestion = activeSuggestions?.suggestions?.find((s: any) => s.type === "COMBO");
-  const filteredSuggestions = activeSuggestions?.suggestions?.filter((s: any) => s.type !== "COMBO") || [];
-
-  const handleHandoff = (sessionId: string) => {
-    setHandoffStatus(sessionId, "pending");
-    sendMessage("session:handoff", { sessionId });
-    if (activeSuggestionId) {
-      sendMessage("suggestion:accept", { suggestionId: activeSuggestionId });
-      setActiveSuggestionId(null);
+  const open = (r: SearchResult) => {
+    if (['makemytrip','easemytrip','cleartrip'].includes(r.platform)) {
+      sendMessage('session:prepare', {searchId:r.search_id, resultId:r.id});
+    } else if (r.session_id) {
+      useResultStore.getState().setHandoffStatus(r.session_id, "pending");
+      sendMessage("session:handoff", {sessionId:r.session_id});
+    } else if (r.savings_breakdown?.booking_url) {
+      window.open(r.savings_breakdown.booking_url, "_blank", "noopener,noreferrer");
     }
   };
-
-  const getSignalInfo = () => {
-    const p = prediction;
-    if (!p) return { signal: "BUY_NOW", confidence: 80, reasoning: "Current price appears favorable based on historical trends.", color: "hsl(var(--color-success))" };
-    const sig = p.decision?.signal || p.prediction || "BUY_NOW";
-    const conf = p.decision?.confidence ? Math.round(p.decision.confidence * 100) : (p.confidence ? Math.round(p.confidence * 100) : 80);
-    const reason = p.decision?.reasoning || p.reasoning || "Analysis complete.";
-    const color = sig === "BOOK_NOW" || sig === "BUY_NOW" ? "hsl(var(--color-success))" : sig === "WAIT" ? "hsl(var(--color-warning))" : "hsl(var(--color-primary))";
-    return { signal: sig, confidence: conf, reasoning: reason, color };
-  };
-
-  const signalInfo = getSignalInfo();
-
-  if (results.length === 0) {
-    return (
-      <div className="page-container">
-        <div className="page-header">
-          <h1 className="page-title">Verified Flight Results</h1>
-          <p className="page-subtitle">True Cost comparison: final verified checkout price including convenience fees, coupons, and payment rewards.</p>
-        </div>
-        {searchStatus === "running" ? (
-          <div className="grid-2-1 animate-fade-in">
-            <div className="flex-col gap-md">
-              {/* Shimmer Skeletons for flight cards */}
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="skeleton-card">
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div className="glass-skeleton skeleton-title" style={{ width: "30%", height: 18 }}></div>
-                    <div className="glass-skeleton" style={{ width: "15%", height: 16 }}></div>
-                  </div>
-                  <div className="glass-skeleton skeleton-subtitle" style={{ width: "60%", height: 12, marginTop: 10 }}></div>
-                  <div className="divider-dashed" style={{ margin: "14px 0 10px" }} />
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div className="glass-skeleton" style={{ width: "45%", height: 12 }}></div>
-                    <div className="glass-skeleton" style={{ width: "20%", height: 12 }}></div>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="flex-col gap-md">
-              {/* Shimmer Skeleton for details/matrix */}
-              <div className="skeleton-card" style={{ height: 380, display: "flex", flexDirection: "column" }}>
-                <div className="glass-skeleton skeleton-title" style={{ width: "50%", height: 18 }}></div>
-                <div className="glass-skeleton skeleton-subtitle" style={{ width: "80%", height: 12, marginTop: 10, marginBottom: 24 }}></div>
-                <div style={{ flex: 1, display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, paddingBottom: 10 }}>
-                  {[60, 40, 80, 50, 90, 70].map((h, idx) => (
-                    <div key={idx} className="glass-skeleton" style={{ width: "14%", height: `${h}%`, borderRadius: "4px 4px 0 0" }}></div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="glass-card empty-state">
-            <Activity size={36} className="empty-state-icon" />
-            <div className="empty-state-title">No Verified Results</div>
-            <div className="empty-state-desc">Run a flight search from the Cockpit tab to dispatch agents and collect savings.</div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className="page-container">
-      <div className="page-header">
-        <h1 className="page-title">Verified Flight Results</h1>
-        <p className="page-subtitle">True Cost comparison: final verified checkout price including convenience fees, coupons, and payment rewards.</p>
-      </div>
-
-      <div className="grid-2-1">
-        {/* LEFT — Results List */}
-        <div className="flex-col gap-md stagger">
-          {/* AI Signal Banner */}
-          <div className={`glass-card module-card ${signalInfo.signal.includes("BUY") || signalInfo.signal.includes("BOOK") ? "signal-buy" : signalInfo.signal === "WAIT" ? "signal-wait" : "signal-monitor"}`}>
-            <div className="flex-row" style={{ justifyContent: "space-between" }}>
-              <div className="flex-row gap-sm">
-                <CheckCircle2 size={16} style={{ color: signalInfo.color }} />
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>AI Price Advisor</div>
-                  <div style={{ fontSize: 10, color: "hsl(var(--text-muted))" }}>Ensemble Model Output</div>
-                </div>
-              </div>
-              <span className={`badge ${signalInfo.signal.includes("BUY") || signalInfo.signal.includes("BOOK") ? "badge-success" : signalInfo.signal === "WAIT" ? "badge-warning" : "badge-primary"}`}>
-                {signalInfo.signal.replace("_", " ")} • {signalInfo.confidence}%
-              </span>
-            </div>
-            <p style={{ fontSize: 12, color: "hsl(var(--text-secondary))", marginTop: 8, lineHeight: 1.5 }}>
-              {signalInfo.reasoning}
-            </p>
-          </div>
-
-          {/* Flight Cards */}
-          {results.map((result) => {
-            const isSelected = selectedResult?.id === result.id;
-            const dealText = result.deal_score >= 85 ? "EXCEPTIONAL" : result.deal_score >= 70 ? "GOOD" : "AVERAGE";
-            const dealClass = result.deal_score >= 85 ? "exceptional" : result.deal_score >= 70 ? "good" : "average";
-
-            return (
-              <div
-                key={result.id}
-                id={"flight-card-" + result.id}
-                className={`glass-card module-card interactive ${isSelected ? "selected" : ""} ${result.id === highlightedFlightId ? "highlighted-pulse" : ""}`}
-                onClick={() => {
-                  setSelectedResult(result);
-                  setHighlightedFlightId(null);
-                }}
-              >
-                <div className="flex-row" style={{ justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
-                  <div>
-                    <span className="badge badge-neutral" style={{ marginBottom: 6, display: "inline-block" }}>
-                      {result.platform.toUpperCase()}
-                    </span>
-                    <h3 style={{ margin: "4px 0 2px", fontSize: 15, fontWeight: 600 }}>
-                      {result.airline} {result.flight_number} {result.departure_date && <span style={{ fontSize: 11, color: "hsl(var(--text-muted))", fontWeight: 400, marginLeft: 8 }}>({result.departure_date})</span>}
-                    </h3>
-                    <span style={{ fontSize: 11, color: "hsl(var(--text-muted))" }}>
-                      {result.departure_time} – {result.arrival_time} • {result.duration} ({result.stops === 0 ? "Direct" : `${result.stops} Stop`})
-                    </span>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <div className={`deal-score ${dealClass}`} style={{ marginBottom: 4 }}>
-                      {result.deal_score}/100 ({dealText})
-                    </div>
-                    <div className="price-original">
-                      ₹{result.base_price.toLocaleString("en-IN")}
-                    </div>
-                    <div className="price-final">
-                      ₹{result.effective_price.toLocaleString("en-IN")}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="divider-dashed" style={{ margin: "0 0 10px" }} />
-
-                <div className="flex-row" style={{ justifyContent: "space-between", fontSize: 12 }}>
-                  <span className="flex-row gap-sm" style={{ color: "hsl(var(--text-secondary))" }}>
-                    <Tag size={12} style={{ color: "hsl(var(--text-muted))" }} />
-                    Coupon: {result.best_coupon_code || "None"}
-                  </span>
-                  <span className="price-savings">
-                    Saved ₹{((result.savings || 0) + (result.savings_breakdown?.total_stacking_savings || 0)).toLocaleString("en-IN")}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
-
-          {/* Comparison Table */}
-          <div className="glass-card module-card">
-            <span className="form-label" style={{ marginBottom: 10 }}>Competitor Matrix</span>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Platform</th>
-                  <th>Base</th>
-                  <th>Coupon</th>
-                  <th>Checkout</th>
-                  <th>True Cost</th>
-                </tr>
-              </thead>
-              <tbody>
-                {results.map((r) => (
-                  <tr key={r.id}>
-                    <td style={{ fontWeight: 600 }}>{r.platform.toUpperCase()}</td>
-                    <td>₹{r.base_price.toLocaleString("en-IN")}</td>
-                    <td style={{ color: "hsl(var(--color-success))", fontWeight: 500 }}>{r.best_coupon_code || "—"}</td>
-                    <td>₹{r.final_price.toLocaleString("en-IN")}</td>
-                    <td style={{ color: "hsl(var(--color-success))", fontWeight: 600 }}>₹{r.effective_price.toLocaleString("en-IN")}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* How to Save More (Stacked Strategy Card) */}
-          {comboSuggestion && (
-            <div className="glass-card module-card combo-savings-card" style={{
-              background: "linear-gradient(135deg, hsl(var(--color-primary-dark) / 0.2) 0%, hsl(var(--color-success-dark) / 0.1) 100%)",
-              border: "1px solid hsl(var(--color-success) / 0.3)",
-              padding: 16,
-              borderRadius: "var(--border-radius)",
-              position: "relative",
-              overflow: "hidden",
-              cursor: "pointer"
-            }}
-            onClick={() => {
-              if (comboSuggestion.id) {
-                sendMessage("suggestion:click", { suggestionId: comboSuggestion.id });
-                sendMessage("suggestion:accept", { suggestionId: comboSuggestion.id });
-              }
-              alert("Stacked savings strategy activated! Follow the step-by-step breakdown below.");
-            }}>
-              <div style={{
-                position: "absolute",
-                top: -50,
-                right: -50,
-                width: 120,
-                height: 120,
-                background: "hsl(var(--color-success) / 0.15)",
-                filter: "blur(40px)",
-                borderRadius: "50%",
-                pointerEvents: "none"
-              }} />
-
-              <div className="flex-row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <div className="flex-row gap-sm" style={{ alignItems: "center" }}>
-                  <Brain size={18} style={{ color: "hsl(var(--color-success))" }} />
-                  <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "hsl(var(--text-primary))", letterSpacing: "0.02em" }}>
-                    How to Save More (Stacked Strategy)
-                  </h3>
-                </div>
-                <span className="badge badge-success" style={{ padding: "4px 8px", fontSize: 9 }}>
-                  RECOMMENDED
-                </span>
-              </div>
-
-              <div className="flex-col gap-sm">
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
-                  {(() => {
-                    const match = comboSuggestion.detail.match(/combining steps: (.*?)\./);
-                    const steps = match ? match[1].split(" + ") : [comboSuggestion.title];
-                    return steps.map((step: string, idx: number) => (
-                      <span key={idx} style={{
-                        fontSize: 9,
-                        fontWeight: 600,
-                        padding: "3px 6px",
-                        background: "hsl(var(--bg-primary) / 0.7)",
-                        border: "1px solid hsl(var(--card-border))",
-                        borderRadius: 4,
-                        color: "hsl(var(--text-primary))"
-                      }}>
-                        {step}
-                      </span>
-                    ));
-                  })()}
-                </div>
-
-                <div className="flex-row" style={{ justifyContent: "space-between", alignItems: "flex-end" }}>
-                  <div style={{ flex: 1, marginRight: 16 }}>
-                    <p style={{ margin: 0, fontSize: 11, color: "hsl(var(--text-secondary))", lineHeight: 1.4 }}>
-                      {comboSuggestion.detail}
-                    </p>
-                  </div>
-                  <div style={{ textAlign: "right", minWidth: 100 }}>
-                    <span style={{ fontSize: 8, color: "hsl(var(--text-muted))", display: "block", textTransform: "uppercase" }}>Stacked Savings</span>
-                    <span style={{ fontSize: 16, fontWeight: 800, color: "hsl(var(--color-success))" }}>
-                      ₹{comboSuggestion.net_saving.toLocaleString("en-IN")}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Smart Travel Advice Card */}
-          {activeSuggestions && (
-            <div className="glass-card module-card" style={{ marginTop: 0 }}>
-              <div className="flex-row gap-sm" style={{ alignItems: "center", marginBottom: 12 }}>
-                <Activity size={18} style={{ color: "hsl(var(--color-primary))" }} />
-                <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "hsl(var(--text-primary))" }}>
-                  Smart Travel Advice
-                </h3>
-              </div>
-              
-              <div className="flex-col gap-md">
-                {/* Timing Advice */}
-                {activeSuggestions.timing_advice && (
-                  <div style={{
-                    padding: 12,
-                    borderRadius: "var(--border-radius)",
-                    background: "hsl(var(--bg-secondary))",
-                    border: "1px solid hsl(var(--card-border))"
-                  }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
-                      <span style={{ fontSize: 10, fontWeight: 600, color: "hsl(var(--text-muted))" }}>TIMING VERDICT</span>
-                      <span className={`badge ${
-                        activeSuggestions.timing_advice.advice.includes("BOOK") || activeSuggestions.timing_advice.advice.includes("BUY")
-                          ? "badge-success" 
-                          : activeSuggestions.timing_advice.advice === "WAIT"
-                          ? "badge-warning"
-                          : "badge-primary"
-                      }`}>
-                        {activeSuggestions.timing_advice.advice.replace("_", " ")}
-                      </span>
-                    </div>
-                    <p style={{ margin: "0 0 8px 0", fontSize: 11, color: "hsl(var(--text-secondary))", lineHeight: 1.4 }}>
-                      {activeSuggestions.timing_advice.text}
-                    </p>
-                    
-                    {/* Confidence Meter */}
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
-                      <span style={{ fontSize: 9, color: "hsl(var(--text-muted))", fontWeight: 500 }}>CONFIDENCE</span>
-                      <div style={{ flex: 1, height: 4, background: "hsl(var(--bg-elevated))", borderRadius: 2, overflow: "hidden" }}>
-                        <div style={{ height: "100%", width: `${signalInfo.confidence}%`, background: signalInfo.color }} />
-                      </div>
-                      <span style={{ fontSize: 9, fontWeight: 600, color: signalInfo.color }}>{signalInfo.confidence}%</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Specific Advice Items */}
-                {filteredSuggestions && filteredSuggestions.map((alt: any, idx: number) => {
-                  let IconComponent = Clock;
-                  let iconColor = "hsl(var(--color-primary))";
-                  let categoryName = "Alternative Strategy";
-                  
-                  if (alt.type === "DATE_SHIFT") {
-                    IconComponent = Calendar;
-                    iconColor = "hsl(var(--color-success))";
-                    categoryName = "Date Flexibility";
-                  } else if (alt.type === "AIRPORT_ALT") {
-                    IconComponent = MapPin;
-                    iconColor = "hsl(var(--color-warning))";
-                    categoryName = "Airport Alternative";
-                  } else if (alt.type === "LAYOVER") {
-                    IconComponent = Clock;
-                    iconColor = "#a855f7";
-                    categoryName = "Stops & Layovers";
-                  } else if (alt.type === "TIME_SHIFT") {
-                    IconComponent = Sun;
-                    iconColor = "#38bdf8";
-                    categoryName = "Timing Shift";
-                  } else if (alt.type === "CASHBACK") {
-                    IconComponent = Tag;
-                    iconColor = "hsl(var(--color-success))";
-                    categoryName = "Payment Offer";
-                  }
-
-                  const savingsValue = alt.net_saving !== undefined ? alt.net_saving : alt.saving;
-
-                  return (
-                    <div 
-                      key={idx} 
-                      style={{
-                        display: "flex",
-                        flexDirection: "row",
-                        justifyContent: "space-between",
-                        alignItems: "flex-start",
-                        background: "hsl(var(--bg-secondary))",
-                        padding: 12,
-                        borderRadius: "var(--border-radius)",
-                        border: "1px solid hsl(var(--card-border))",
-                        gap: 12,
-                        cursor: (alt.type === "LAYOVER" || alt.type === "TIME_SHIFT" || alt.type === "DATE_SHIFT") ? "pointer" : "default"
-                      }}
-                      onClick={() => {
-                        if (alt.id) {
-                          sendMessage("suggestion:click", { suggestionId: alt.id });
-                          setActiveSuggestionId(alt.id);
-                        }
-                        
-                        if ((alt.type === "LAYOVER" || alt.type === "TIME_SHIFT" || alt.type === "DATE_SHIFT") && alt.flight_id) {
-                          const matchingFlight = results.find(r => r.id === alt.flight_id);
-                          if (matchingFlight) {
-                            setSelectedResult(matchingFlight);
-                            setHighlightedFlightId(alt.flight_id);
-                            setTimeout(() => {
-                              const el = document.getElementById("flight-card-" + alt.flight_id);
-                              if (el) {
-                                el.scrollIntoView({ behavior: "smooth", block: "center" });
-                              }
-                            }, 50);
-                            return;
-                          }
-                        }
-                        
-                        if (alt.type === "DATE_SHIFT" && alt.date) {
-                          if (alt.id) {
-                            sendMessage("suggestion:accept", { suggestionId: alt.id });
-                          }
-                          updateTrip({ departureDate: alt.date });
-                          setActiveTab("search");
-                        }
-                      }}
-                    >
-                      <div style={{ display: "flex", padding: 6, borderRadius: 6, background: "hsl(var(--bg-tertiary))", marginTop: 2 }}>
-                        <IconComponent size={16} style={{ color: iconColor }} />
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 3 }}>
-                          <div>
-                            <span style={{ fontSize: 9, fontWeight: 600, color: "hsl(var(--text-muted))", display: "block", textTransform: "uppercase" }}>
-                              {categoryName}
-                            </span>
-                            <span style={{ fontSize: 13, fontWeight: 600 }}>{alt.title}</span>
-                          </div>
-                          {savingsValue > 0 && (
-                            <span style={{ fontSize: 13, fontWeight: 700, color: "hsl(var(--color-success))", whiteSpace: "nowrap", marginLeft: 8 }}>
-                              Save ₹{savingsValue.toLocaleString("en-IN")}
-                            </span>
-                          )}
-                        </div>
-                        <p style={{ margin: 0, fontSize: 11, color: "hsl(var(--text-secondary))", lineHeight: 1.4 }}>
-                          {alt.detail}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Nearby Dates Price Comparison Matrix */}
-          {dateAlternatives && dateAlternatives.length > 0 && (
-            <div className="glass-card module-card" style={{ marginTop: 0 }}>
-              <div className="flex-row gap-sm" style={{ alignItems: "center", marginBottom: 12 }}>
-                <Calendar size={18} style={{ color: "hsl(var(--color-success))" }} />
-                <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "hsl(var(--text-primary))" }}>
-                  Nearby Dates Price Comparison
-                </h3>
-              </div>
-              <div style={{ display: "flex", gap: "8px", justifyContent: "space-between", flexWrap: "wrap" }}>
-                {dateAlternatives.map((alt: any, idx: number) => {
-                  let formattedDate = alt.date;
-                  try {
-                    const parts = alt.date.split("-");
-                    if (parts.length === 3) {
-                      const dt = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-                      formattedDate = dt.toLocaleDateString("en-IN", { month: "short", day: "numeric" });
-                    }
-                  } catch (e) {}
-
-                  return (
-                    <div key={idx} style={{
-                      textAlign: "center",
-                      padding: "10px 8px",
-                      background: "hsl(var(--bg-secondary))",
-                      borderRadius: "var(--border-radius)",
-                      border: "1px solid hsl(var(--card-border))",
-                      flex: "1 1 20%",
-                      minWidth: 80
-                    }}>
-                      <div style={{ fontSize: 10, color: "hsl(var(--text-muted))", marginBottom: 4 }}>{formattedDate}</div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: "hsl(var(--text-primary))" }}>
-                        ₹{alt.price.toLocaleString("en-IN")}
-                      </div>
-                      {alt.savings > 0 ? (
-                        <div style={{ fontSize: 9, color: "hsl(var(--color-success))", fontWeight: 600, marginTop: 2 }}>
-                          -₹{alt.savings.toLocaleString("en-IN")}
-                        </div>
-                      ) : alt.savings < 0 ? (
-                        <div style={{ fontSize: 9, color: "hsl(var(--color-error))", fontWeight: 600, marginTop: 2 }}>
-                          +₹{Math.abs(alt.savings).toLocaleString("en-IN")}
-                        </div>
-                      ) : (
-                        <div style={{ fontSize: 9, color: "hsl(var(--text-muted))", marginTop: 2 }}>Base</div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* RIGHT — Waterfall */}
-        <div className="flex-col gap-md">
-          {selectedResult ? (
-            <div className="glass-card module-card animate-fade-in">
-              <h3 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 600 }}>Savings Waterfall</h3>
-              <p style={{ fontSize: 12, color: "hsl(var(--text-secondary))", marginBottom: 20 }}>
-                How the listed price drops through coupon, cashback, and card rewards.
-              </p>
-
-              {/* Chart */}
-              <div style={{ height: 200, marginBottom: 20 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={[
-                      { name: "Base", amount: selectedResult.base_price },
-                      { name: "Coupon", amount: -selectedResult.savings },
-                      { name: "Fee", amount: selectedResult.savings_breakdown?.convenience_fee || 0 },
-                      { name: "Cashback", amount: -(selectedResult.savings_breakdown?.cashback_portal?.amount || 0) },
-                      { name: "Card", amount: -(selectedResult.savings_breakdown?.payment_method?.amount || 0) },
-                      { name: "Final", amount: selectedResult.effective_price },
-                    ]}
-                    margin={{ top: 10, right: 10, left: 10, bottom: 5 }}
-                  >
-                    <XAxis dataKey="name" stroke="hsl(var(--text-muted))" style={{ fontSize: 10 }} />
-                    <YAxis stroke="hsl(var(--text-muted))" style={{ fontSize: 10 }} />
-                    <Tooltip
-                      formatter={(value: number) => [`₹${Math.abs(value).toLocaleString("en-IN")}`]}
-                      contentStyle={{ background: "hsl(var(--bg-tertiary))", border: "1px solid hsl(var(--card-border))", borderRadius: 6, color: "hsl(var(--text-primary))", fontSize: 11 }}
-                    />
-                    <Bar dataKey="amount" radius={[4, 4, 0, 0]}>
-                      {["#64748b", "#f87171", "#f59e0b", "#6366f1", "#4f46e5", "#34d399"].map((fill, i) => (
-                        <Cell key={i} fill={fill} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-
-              {/* Line Items */}
-              <div className="flex-col gap-md" style={{ marginBottom: 20 }}>
-                <div className="flex-row" style={{ justifyContent: "space-between", fontSize: 13 }}>
-                  <span style={{ color: "hsl(var(--text-secondary))" }}>Base Listed Price</span>
-                  <span>₹{selectedResult.base_price.toLocaleString("en-IN")}</span>
-                </div>
-                {selectedResult.savings > 0 && (
-                  <div className="flex-row" style={{ justifyContent: "space-between", fontSize: 13, color: "hsl(var(--color-error))" }}>
-                    <span>Coupon ({selectedResult.best_coupon_code})</span>
-                    <span>- ₹{selectedResult.savings.toLocaleString("en-IN")}</span>
-                  </div>
-                )}
-                {selectedResult.savings_breakdown?.convenience_fee !== undefined && selectedResult.savings_breakdown.convenience_fee > 0 && (
-                  <div className="flex-row" style={{ justifyContent: "space-between", fontSize: 13, color: "hsl(var(--color-warning))" }}>
-                    <span>Convenience Fee</span>
-                    <span>+ ₹{selectedResult.savings_breakdown.convenience_fee.toLocaleString("en-IN")}</span>
-                  </div>
-                )}
-                {selectedResult.savings_breakdown?.cashback_portal?.amount !== undefined && selectedResult.savings_breakdown.cashback_portal.amount > 0 && (
-                  <div className="flex-row" style={{ justifyContent: "space-between", fontSize: 13, color: "hsl(var(--color-primary))" }}>
-                    <span>Cashback ({selectedResult.savings_breakdown.cashback_portal.provider})</span>
-                    <span>- ₹{selectedResult.savings_breakdown.cashback_portal.amount.toLocaleString("en-IN")}</span>
-                  </div>
-                )}
-                {selectedResult.savings_breakdown?.payment_method?.amount !== undefined && selectedResult.savings_breakdown.payment_method.amount > 0 && (
-                  <div className="flex-row" style={{ justifyContent: "space-between", fontSize: 13, color: "hsl(var(--color-primary))" }}>
-                    <span>Card Rewards ({selectedResult.savings_breakdown.payment_method.provider})</span>
-                    <span>- ₹{selectedResult.savings_breakdown.payment_method.amount.toLocaleString("en-IN")}</span>
-                  </div>
-                )}
-                <div className="divider" />
-                <div className="flex-row" style={{ justifyContent: "space-between", fontSize: 15, fontWeight: 700 }}>
-                  <span>Effective True Price</span>
-                  <span style={{ color: "hsl(var(--color-success))" }}>₹{selectedResult.effective_price.toLocaleString("en-IN")}</span>
-                </div>
-              </div>
-
-              {/* Claim Guide */}
-              {selectedResult.savings_breakdown?.instructions !== undefined && selectedResult.savings_breakdown.instructions.length > 0 && (
-                <div style={{ background: "hsl(var(--bg-primary))", padding: 14, borderRadius: "var(--border-radius)", border: "1px solid hsl(var(--card-border))", marginBottom: 20 }}>
-                  <span className="form-label" style={{ marginBottom: 8 }}>How to claim this price</span>
-                  <div style={{ fontSize: 12, color: "hsl(var(--text-secondary))", lineHeight: 1.6 }}>
-                    {selectedResult.savings_breakdown.instructions.map((inst, i) => (
-                      <div key={i} style={{ marginBottom: 3 }}>{inst}</div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Handoff Button */}
-              {handoffStatus[selectedResult.session_id] === "success" ? (
-                <div className="badge badge-success" style={{ width: "100%", padding: 14, justifyContent: "center", fontSize: 13 }}>
-                  ✓ Browser focused — complete payment in the active window.
-                </div>
-              ) : (
-                <button
-                  className="btn btn-primary btn-launch"
-                  onClick={() => handleHandoff(selectedResult.session_id)}
-                  disabled={handoffStatus[selectedResult.session_id] === "pending"}
-                >
-                  {handoffStatus[selectedResult.session_id] === "pending"
-                    ? "Focusing Browser..."
-                    : "Book Now — Open Handoff Session"}
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="glass-card empty-state">
-              <ChevronRight size={24} style={{ transform: "rotate(90deg)", color: "hsl(var(--text-dim))", marginBottom: 8 }} />
-              <div className="empty-state-desc">
-                Select a flight option to inspect the Savings Waterfall and activate booking handoff.
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+  return <div className="page-container">
+    <div className="page-header"><h1 className="page-title">Compare flight prices</h1>
+      <p className="page-subtitle">Verified payable totals include the charges shown at checkout. Listed fares still need fee and coupon verification.</p></div>
+    <div className="glass-card module-card" style={{marginBottom:20}}>
+      <h3>Can’t use a deal?</h3><p>Read the payment conditions below. Tell us if a card or method is unavailable and we’ll compare the next options across websites.</p>
+      <label>Deal restriction<textarea className="form-input" value={feedback} onChange={e=>setFeedback(e.target.value)} placeholder="e.g. I don’t have HDFC; exclude Flipkart Axis; no EMI; only UPI"/></label>
+      <button className="btn btn-secondary" disabled={!feedback.trim() || !results.length} onClick={()=>sendMessage('search:feedback',{searchId:results[0].search_id,text:feedback})}>Find the next available deal</button>
+      {dealOptions && <div><p>{dealOptions.message}</p>
+        <p>{dealOptions.bestVerified ? 'Next verified payable option: '+money(dealOptions.bestVerified.final_price)+' on '+dealOptions.bestVerified.platform : 'No verified payable total is available for these restrictions yet.'}</p>
+        {dealOptions.bestListed && <p>Lowest corroborated listed option: {money(dealOptions.bestListed.final_price)} on {dealOptions.bestListed.platform}. Its own fees and eligible coupons still need verification.</p>}
+        <p>{dealOptions.eligibleOffers.length} conditional offers remain across the searched websites.</p>
+        <details><summary>Excluded offers and reasons ({dealOptions.excludedOffers.length})</summary>
+          {dealOptions.excludedOffers.map(c=><p key={c.platform+c.code}>{c.platform} · {c.code}: {c.filter_reason}</p>)}
+        </details>
+      </div>}
     </div>
-  );
+    <div className="glass-card module-card" style={{marginBottom:20}}>
+      <button className="btn btn-primary" onClick={()=>useSearchStore.getState().setActiveTab('watchlist')}>Add this trip to Red Room</button>
+      <label style={{display:'block',margin:'12px 0'}}>Ground transfer estimate (₹)<input className="form-input" type="number" min="0" value={transferEstimate} onChange={e=>setTransferEstimate(Number(e.target.value))}/></label>
+      <button className="btn btn-secondary" disabled={exploring || !results.length || status==='running'} onClick={()=>{
+        setExploring(true);
+        sendMessage('search:explore',{searchId:results[0].search_id,transferBudget:transferEstimate,hubs:['BOM','AMD']});
+      }}>{exploring?'Searching real alternatives...':'Explore dates, airports & separate tickets'}</button>
+      {alternatives.map((a,i)=><p key={i}><strong>{a.title}</strong> — {a.detail}</p>)}
+    </div>
+    {failures.length>0 && <div className="glass-card module-card" style={{marginBottom:20}}>
+      <strong>Some websites could not be compared</strong>
+      {failures.map(f=><p key={f.platform}>{f.platform}: {f.error || 'No usable quotes. See search logs.'} {f.manualUrl && <a href={f.manualUrl} target="_blank" rel="noopener noreferrer">Open exact search manually</a>}</p>)}
+    </div>}
+    {flagged.length>0 && <div className="glass-card module-card" style={{marginBottom:20}}>
+      <strong>{flagged.length} suspicious result(s) quarantined</strong><p>They are excluded from recommendations and learning. A source disagreement needs investigation before booking.</p>
+      <button className="btn btn-secondary" onClick={()=>setShowFlagged(!showFlagged)}>{showFlagged?'Hide':'Inspect'} flagged results</button>
+    </div>}
+    <div className="glass-card module-card" style={{marginBottom:20}}>
+      <strong>When to buy</strong>
+      {suggestions?.brain ? <IntelligenceCard report={suggestions.brain}/> : <p>{suggestions?.advice || "Search first, then verify checkout totals."}</p>}
+      {suggestions?.suggestions?.map((s,i) => <p key={i}><strong>{s.title}: {money(s.saving)}</strong> — {s.detail}</p>)}
+    </div>
+    {results.length === 0 && <div className="glass-card module-card">
+      {status === "running" ? "Searching selected websites. Results will appear as they arrive." : "No usable quotes yet. Start a search and check platform logs if a website fails."}
+    </div>}
+    {groups.map(group => {
+      const currentVerified=(r:SearchResult)=>currentReceipt(r,handoff,Math.max(receiptTime,Date.now()));
+      const best = group.rows.find(currentVerified);
+      return <section key={group.direction} style={{marginBottom:24}}>
+        <h2>{group.direction === "inbound" ? "Return leg (separate booking)" : "Outbound flights"}</h2>
+        {best && <p>Lowest verified total among these results: <strong>{money(best.final_price)} on {best.platform}</strong>.</p>}
+        {group.rows.map(r => {
+          const meta = r.savings_breakdown || {};
+          return <article key={r.id} className="glass-card module-card" style={{marginBottom:12}}>
+            <div style={{display:"flex",flexWrap:"wrap",justifyContent:"space-between",gap:16}}>
+              <div><strong>{r.airline} {r.flight_number || ""}</strong>
+                <p>{meta.origin} → {meta.destination} · {r.departure_date} · {r.departure_time}–{r.arrival_time || "Unknown arrival"}</p>
+                <p>{r.duration || "Duration unavailable"} · {r.stops === 0 ? "Nonstop" : r.stops+" stop(s)"} · {meta.passenger_count || 1} adult(s) · {meta.cabin_class || "Cabin unrecorded"}</p>
+                {meta.layovers?.map((layover,i)=><p key={i}>Connection: {layover.airport} · {Math.floor(layover.duration/60)}h {layover.duration%60}m{layover.change_of_airport?' · airport change':''}. Confirm itinerary and terminals before booking.</p>)}
+                <span className={currentVerified(r) ? "badge badge-success" : "badge badge-warning"}>{verified(r) && !currentVerified(r) ? 'Recorded checkout total — current session unconfirmed; reopen and reverify' : verified(r) ? "Checkout total verified for current session" : meta.source_freshness==='cache_age_unknown' ? "Cached price reference — age unknown" : "Listed fare — fees pending"}</span>
+                <p><strong>Integrity: {meta.integrity?.status?.replaceAll('_',' ') || 'Historical result; unchecked'}</strong></p>
+                {meta.integrity?.reasons?.map((reason,i)=><p key={i} style={{fontSize:12}}>{reason}</p>)}
+                <p>{r.platform} · {meta.source_freshness==='cache_age_unknown' ? 'Retrieved' : 'Observed'} {meta.observed_at ? new Date(meta.observed_at).toLocaleString() : "time unknown"}</p>
+                {meta.source_inventory && <details><summary>Search coverage: partial</summary>
+                  <p>{meta.source_inventory.limitation}</p>
+                  <p>{meta.source_inventory.parsed_rows ?? meta.source_inventory.normalized_rows ?? 0} parsed rows from {meta.source_inventory.candidate_cards ?? meta.source_inventory.returned_rows ?? 0} observed cards or returned rows. The app ranks at most 12 cheapest valid listings per website and leg.</p>
+                </details>}
+              </div>
+              <div style={{minWidth:200,textAlign:"right"}}>
+                {verified(r) && !currentVerified(r) && <p>Recorded payment total</p>}
+                <div style={{fontSize:28,fontWeight:700}}>{money(r.final_price)}</div>
+                {r.best_coupon_code && <p>{verified(r) && !currentVerified(r) ? 'Recorded coupon saving: ' : 'Coupon '}{r.best_coupon_code}{verified(r) && !currentVerified(r) ? ' · ' : ' saves '}{money(r.savings)}</p>}
+                <p style={{maxWidth:300,fontSize:12}}>{meta.fee_status || "Historical result; rerun to verify."}</p>
+                {meta.booking_problem && <p role="alert">{meta.booking_problem.message} The booking browser remains available for manual recovery.</p>}
+                {verified(r) && meta.fee_scope && <p style={{maxWidth:300,fontSize:12}}>{meta.fee_scope}</p>}
+                <button className="btn btn-primary" onClick={()=>open(r)} disabled={meta.integrity?.status==='flagged' || (!!r.session_id && handoff[r.session_id]==="pending")}>
+                  {['makemytrip','easemytrip','cleartrip'].includes(r.platform) ? "Open booking" : "Open website"}
+                </button>
+                {r.session_id && handoff[r.session_id]==='success' && <p>Booking browser opened. Return here to verify the payment total.</p>}
+                {r.session_id && handoff[r.session_id]==='failed' && <p>Booking session unavailable. Use Open booking to try preparing it again.</p>}
+                {r.session_id && handoff[r.session_id]==='success' && ['makemytrip','easemytrip','cleartrip'].includes(r.platform) && <button className="btn btn-secondary" style={{marginLeft:8,marginTop:8}}
+                  disabled={checkoutStatus[r.session_id]?.status==='running'}
+                  onClick={()=>{
+                    useResultStore.getState().setCheckoutStatus(r.session_id!, {status:'running',message:'Requesting cart verification…'});
+                    sendMessage("session:verify",{sessionId:r.session_id});
+                  }}>{checkoutStatus[r.session_id]?.status==='running'?'Testing this cart…':'Verify total & coupons'}</button>}
+                {r.session_id && checkoutStatus[r.session_id] && <p role="status" style={{maxWidth:300,fontSize:12}}>{checkoutStatus[r.session_id].message}</p>}
+                <GoogleBookingContext result={r} sendMessage={sendMessage}/>
+              </div>
+            </div>
+            <button className="btn btn-secondary" onClick={()=>setExpanded(expanded===r.id ? null : r.id)}>Coupon details</button>
+            {expanded===r.id && <div style={{marginTop:12}}>
+              {meta.previous_checkout && <p>Previous payment observation: {money(meta.previous_checkout.price)}{meta.previous_checkout.coupon?' with '+meta.previous_checkout.coupon:''}, {meta.previous_checkout.observed_at?new Date(meta.previous_checkout.observed_at).toLocaleString():'time unavailable'}. It was withdrawn for a cart recheck and is retained only as a record.</p>}
+              <p>Enter passenger details and select your intended payment method in Open booking, then return here to verify. Changing baggage, insurance, fare or payment can change the total.</p>
+              {r.all_tested_coupons?.length ? r.all_tested_coupons.map((c,i)=><p key={i}><strong>{c.code}</strong>: {c.status.replaceAll("_"," ")} {c.price ? money(c.price) : ""} {c.reason || ""}</p>) : <p>No coupon has been verified for this flight.</p>}
+              {meta.coupon_coverage && <p>Tested {meta.coupon_coverage.tested} of {meta.coupon_coverage.eligible} eligible codes · {meta.coupon_coverage.complete?'all eligible collected codes tested; discovery is not exhaustive':'partial or inconclusive coverage; no saving assumed for unresolved codes'}. {meta.coupon_coverage.collection}</p>}
+            </div>}
+          </article>
+        })}
+      </section>
+    })}
+    <div className="glass-card module-card"><h3>Published coupons &amp; bank offers</h3>
+      <p>Discovered offers are candidates. Eligibility, savings and platform fees are verified on the payment page for your chosen flight.</p>
+      <label>Coupon website<select aria-label="Coupon website" className="form-input" value={couponSite} disabled={couponSaving} onChange={e=>setCouponSite(e.target.value)}>
+        {["makemytrip","easemytrip","cleartrip"].map(p=><option key={p}>{p}</option>)}</select></label>
+      <button className="btn btn-secondary" disabled={offerStatus.startsWith('Refreshing')} onClick={()=>{
+        useResultStore.getState().setOfferStatus('Refreshing public offer sources...');
+        sendMessage('coupon:refresh',{platforms:[couponSite]});
+      }}>Refresh offers</button>
+      {offerStatus && <p>{offerStatus}</p>}
+      <details><summary>Published candidates ({offers.length}) — conditions need checking</summary>
+      {offers.length ? offers.map(c=><div key={c.code} style={{margin:'12px 0'}}>
+        <strong>{c.code}</strong> · {c.bank_restriction || 'Read payment restrictions'} · {c.valid_until ? 'Published expiry '+c.valid_until : 'Expiry not published'}
+        {dealOptions?.excludedOffers.find(x=>x.platform===c.platform && x.code===c.code) && <p>Excluded: {dealOptions.excludedOffers.find(x=>x.platform===c.platform && x.code===c.code)?.filter_reason}</p>}
+        <p>{c.description || 'Read the source terms before applying.'}</p>
+        {c.source_url && <a href={c.source_url} target="_blank" rel="noopener noreferrer">Offer source</a>}
+      </div>) : <p>No explicit published codes cached for this website. You can add a current flight offer below.</p>}
+      </details>
+      <details><summary>Coupon track record ({couponTrackRecord?.length || 0} recent runs on {couponSite})</summary>
+        <p>Success applies to the recorded booking, date, conditions and payment. Review trials do not verify final fees. Interrupted or pending runs are unverified; no website-wide guarantee is made.</p>
+        <button className="btn btn-secondary" onClick={()=>sendMessage('coupon:list',{platform:couponSite})}>Refresh track record</button>
+        {!couponTrackRecord?.length && <p>No scoped trials recorded yet. Published offers above have not been proven for your booking.</p>}
+        {couponTrackRecord?.map(run=><details key={run.id} style={{margin:'12px 0'}}>
+          <summary>{run.scope.origin || '?'} → {run.scope.destination || '?'} · {run.scope.departure_date || 'Date unverified'} · {run.status.replaceAll('_',' ')} · {new Date(run.started_at).toLocaleString()}</summary>
+          <p>{run.scope.flight_number} · {run.scope.passenger_count || '?'} adult(s) · {run.scope.cabin_class} · {run.scope.payment?.method || 'Payment unverified'} {run.scope.payment?.banks?.join(', ')} · {run.scope.stage.replaceAll('_',' ')}</p>
+          {run.summary.best_price!=null && <p>Observed total: {money(run.summary.best_price)} · {run.status==='checkout_verified'?'Best confirmed during this run: ':'Lowest observed during this unverified run (conditions still apply): '}{run.summary.best_coupon || 'No reducing code'}.</p>}
+          {run.summary.coverage && <p>{run.summary.coverage.manual_review?`Manually tried ${run.summary.coverage.tested} candidate(s) at review; complete booking eligibility is unconfirmed.`:`Tested ${run.summary.coverage.tested} of ${run.summary.coverage.eligible} eligible collected codes.`} {run.summary.coverage.complete?'Discovery is not exhaustive.':'Conditional, untested or unresolved offers remain; no saving is assumed for them.'}</p>}
+          {run.summary.reason && <p>{run.summary.reason}</p>}
+          {run.trials.map((trial,i)=><div key={i}><strong>{trial.code}: {trial.status==='valid_match' && run.status!=='checkout_verified'?'accepted at review; payment eligibility unverified':trial.status.replaceAll('_',' ')}</strong>
+            <p>{trial.price!=null ? money(trial.price) : ''} {trial.savings!=null ? ' · Saving '+money(trial.savings) : ''} · {new Date(trial.observed_at).toLocaleString()}</p>
+            {trial.reason && <p>{trial.reason}</p>}
+            <p>Terms seen: {trial.terms || trial.restrictions || 'No restrictions established.'}</p>
+            {trial.source_host && <p>Collected from: {trial.source_host}</p>}
+            {trial.valid_until && <p>Published expiry: {trial.valid_until}</p>}
+            {trial.source_url && <a href={trial.source_url} target="_blank" rel="noopener noreferrer">Published offer source</a>}
+          </div>)}
+        </details>)}
+      </details>
+      <h3>Add a coupon to test</h3>
+      <p>Use a code from a current offer. The app will check eligibility and test its actual checkout savings.</p>
+      <div className="flex-row gap-md">
+        <input aria-label="Coupon code" className="form-input" placeholder="Coupon code" value={code} disabled={couponSaving} onChange={e=>setCode(e.target.value.toUpperCase())}/>
+        <button className="btn btn-primary" disabled={!code.trim() || couponSaving} onClick={()=>{
+          couponPending.current=true;setCouponSaving(true);setCouponMessage('Saving code...');
+          sendMessage("coupon:add",{platform:couponSite,code:code.trim(),description:"User supplied flight coupon; eligibility needs verification",discount_type:"FLAT",discount_value:0,source:"user"});
+        }}>{couponSaving?'Saving...':'Save code'}</button></div>
+      {couponMessage && <p role="status">{couponMessage}</p>}
+    </div>
+  </div>;
 }

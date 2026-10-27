@@ -1,4 +1,4 @@
-import { Plane, Search, Tag, History, List, Settings, TrendingUp, Globe, Brain } from "lucide-react";
+import { Plane, Search, Tag, History, List, Settings, TrendingUp, Globe } from "lucide-react";
 
 interface SidebarProps {
   activeTab: string;
@@ -13,8 +13,7 @@ export default function Sidebar({ activeTab, onTabChange, connected, resultCount
     { id: "results", label: "Results Ranker", icon: Tag, badge: resultCount > 0 ? resultCount : undefined },
     { id: "history", label: "Search History", icon: History },
     { id: "price_intel", label: "Price Intelligence", icon: TrendingUp },
-    { id: "watchlist", label: "Watchlist", icon: List },
-    { id: "learning", label: "System Intelligence", icon: Brain },
+    { id: "watchlist", label: "Red Room", icon: List },
     { id: "websites", label: "Manage Websites", icon: Globe },
   ];
 
@@ -23,9 +22,9 @@ export default function Sidebar({ activeTab, onTabChange, connected, resultCount
     <div className="sidebar">
       <div className="logo">
         <div className="logo-icon">
-          <Plane size={14} color="white" />
+          <Plane size={14} color="black" />
         </div>
-        <span>SkyIntel</span>
+        <span>FLIGHT FINDER</span>
       </div>
 
       <div className="sidebar-nav-container">
@@ -34,6 +33,8 @@ export default function Sidebar({ activeTab, onTabChange, connected, resultCount
             <button
               key={item.id}
               className={`nav-link ${activeTab === item.id ? "active" : ""}`}
+              aria-label={item.label}
+              title={item.label}
               onClick={() => onTabChange(item.id)}
             >
               <item.icon size={16} />
@@ -49,6 +50,8 @@ export default function Sidebar({ activeTab, onTabChange, connected, resultCount
       <div className="sidebar-footer" style={{ borderTop: "1px solid rgba(255, 255, 255, 0.06)", paddingTop: 14, marginTop: 14 }}>
         <button
           className={`nav-link ${activeTab === "settings" ? "active" : ""}`}
+          aria-label="Settings"
+          title="Settings"
           onClick={() => onTabChange("settings")}
           style={{ width: "100%", textAlign: "left" }}
         >

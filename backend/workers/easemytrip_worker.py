@@ -1,21 +1,51 @@
 """
-Flight Finder — EaseMyTrip Worker
+Flight Finder â€” EaseMyTrip Worker
 Playwright-based worker that extracts real-time flight listings from EaseMyTrip.
-Utilizes classless DOM matching and falls back to LLM Vision if DOM parsing fails.
+Live fare evidence comes only from visible itinerary cards.
 """
 
 import asyncio
-import base64
 import json
 from datetime import datetime
 from loguru import logger
 from .base_worker import BaseWorker
-from api_key_manager import api_key_manager
 
 
 class EaseMyTripWorker(BaseWorker):
+    # EMT currently keeps an undiscounted [price] span hidden while rendering
+    # the current fare in another spnPrice span without that attribute. Waiting
+    # only for [price] caused 35-second timeouts despite readable listings.
+    LISTINGS_READY = r'''() => {
+        const text=(document.body?.innerText || '').toLowerCase().trim();
+        if (/network problem|unable to connect to our systems|server error|access denied|no flights found|no flights available/.test(text)
+            || text==='200-ok' || text==='200 ok') return true;
+        const visible=el=>el.getBoundingClientRect().width>0 && el.getBoundingClientRect().height>0;
+        for (const card of document.querySelectorAll('.main-bo-lis,.flight-list-item')) {
+            if (!visible(card) || card.querySelector('.main-bo-lis,.flight-list-item')) continue;
+            const body=card.innerText || '';
+            if ((body.match(/\b\d{1,2}:\d{2}\b/g)||[]).length<2 || !/non.?stop|\b\d+\s*stops?\b/i.test(body)) continue;
+            if (/\(\d+\s*km from /i.test(body)) continue;
+            for (const price of card.querySelectorAll('[id^="spnPrice"], [data-testid*="price"], .actual-price, .price, .priceSection, .fliFare, .flight-price')) {
+                if (!visible(price) || /lock|coupon|promo|discount|saving/i.test(price.id)) continue;
+                let excluded=false;
+                for (let ancestor=price;ancestor && ancestor!==card;ancestor=ancestor.parentElement) {
+                    if (ancestor.matches('s,del,[class*="coupon" i],[class*="promo" i]')
+                        || /line-through/.test(getComputedStyle(ancestor).textDecorationLine)) {excluded=true;break;}
+                }
+                if (excluded) continue;
+                const scope=price.parentElement;
+                const currency=scope && (/₹|\bINR\b|\bRs\.?/i.test(scope.innerText)
+                    || [...scope.querySelectorAll('i.CurrncyCD_Rs,[data-currency="INR"]')].some(visible));
+                if (!currency || /\$|\bUSD\b|\bEUR\b|\bGBP\b|£|€/i.test(scope.innerText)) continue;
+                const value=price.innerText.trim().replace(/^(?:₹|INR|Rs\.?)\s*/i,'');
+                if (/^(?:\d+|\d{1,3}(?:,\d{3})+|\d{1,2}(?:,\d{2})*,\d{3})(?:\.\d{1,2})?$/.test(value)
+                    && Number(value.replace(/,/g,''))>0) return true;
+            }
+        }
+        return false;
+    }'''
+
     def __init__(self):
-        self._current_price = 5500.0
         self._intercepted_responses = []
         self._interception_event = asyncio.Event()
 
@@ -36,18 +66,10 @@ class EaseMyTripWorker(BaseWorker):
         return "input[placeholder*='coupon'], input[placeholder*='promo'], #coupon-input"
 
     async def _response_handler(self, response):
-        url = response.url
-        if "easemytrip" in url.lower() and any(k in url.lower() for k in ["flightlist", "flightsearch", "getflight"]):
-            try:
-                headers = response.headers
-                content_type = headers.get("content-type", "")
-                if "application/json" in content_type or "text/plain" in content_type:
-                    data = await response.json()
-                    self._intercepted_responses.append((url, data))
-                    logger.info(f"[EaseMyTripWorker] Intercepted API response: {url}")
-                    self._interception_event.set()
-            except Exception:
-                pass
+        # DOM readers establish fares and coupons; unused JSON response bodies
+        # add memory/decoding cost and could contain booking or passenger data.
+        # BaseWorker independently keeps bounded HTTP failure metadata.
+        return
 
     def find_value_by_keys(self, d, keys, default=None):
         for key in keys:
@@ -211,7 +233,7 @@ class EaseMyTripWorker(BaseWorker):
         if not isinstance(d, dict):
             return None
         price = self.find_numeric_by_keys(d, ["basePrice", "price", "amount", "fB", "pr", "fare", "base_price", "val", "value", "numericValue", "baseFare", "basefare", "Fare", "totalFare", "totalfare"])
-        if price is None or price < 1200:
+        if price is None or price <= 0:
             return None
         flight_number = self.find_string_by_keys(d, ["flightNumber", "flightNo", "fN", "fn", "flightCode", "code", "flightNum", "fltNum", "flight_number"])
         airline = self.find_string_by_keys(d, ["airlineName", "airline", "alN", "carrier", "name", "airline_name"])
@@ -238,10 +260,10 @@ class EaseMyTripWorker(BaseWorker):
                 if k in airline_lower:
                     prefix = v
                     break
-            flight_number = f"{prefix}-0000"
+            flight_number = ""
             
-        departure_time = self.parse_time_value(self.find_value_by_keys(d, ["departureTime", "depTime", "dt", "fdt", "departure", "startTime", "departure_time"])) or "06:00"
-        arrival_time = self.parse_time_value(self.find_value_by_keys(d, ["arrivalTime", "arrTime", "at", "fat", "arrival", "endTime", "arrival_time"])) or "08:15"
+        departure_time = self.parse_time_value(self.find_value_by_keys(d, ["departureTime", "depTime", "dt", "fdt", "departure", "startTime", "departure_time"])) or ""
+        arrival_time = self.parse_time_value(self.find_value_by_keys(d, ["arrivalTime", "arrTime", "at", "fat", "arrival", "endTime", "arrival_time"])) or ""
         
         duration = self.parse_duration_value(self.find_value_by_keys(d, ["duration", "totalDuration", "dur", "td", "flightDuration", "timeTaken"]))
         if not duration:
@@ -301,297 +323,63 @@ class EaseMyTripWorker(BaseWorker):
         self._interception_event.clear()
         
         # Register response listener
-        page.on("response", self._response_handler)
+        self.attach_response_listener(page)
         
         await page.goto(self.base_url, timeout=30000, wait_until="domcontentloaded")
         await asyncio.sleep(2.0)
 
     async def input_search_criteria(self, page, trip: dict) -> None:
-        origin = trip.get("origin", "")
-        dest = trip.get("destination", "")
-        date_str = trip.get("departure_date", "") # Expects YYYY-MM-DD
-        
-        # Convert YYYY-MM-DD to DD/MM/YYYY for EMT search URL parameter
-        try:
-            dt = datetime.strptime(date_str, "%Y-%m-%d")
-            formatted_date = dt.strftime("%d/%m/%Y")
-        except Exception:
-            formatted_date = date_str
+        from quotes import search_url
+        self._trip = trip
+        self._intercepted_responses.clear()
+        self._interception_event.clear()
+        self.attach_response_listener(page)
+        await page.goto(search_url('easemytrip', trip), timeout=45000, wait_until='domcontentloaded')
 
-        # Direct EaseMyTrip search URL construction
-        query_url = f"https://flight.easemytrip.com/FlightList/Index?srch={origin}|{dest}|{formatted_date}&px=1-0-0&ccls=O&tp=O&c=IN"
-        logger.info(f"[EaseMyTripWorker] Navigating directly to search query: {query_url}")
-        await page.goto(query_url, timeout=35000, wait_until="domcontentloaded")
-        await asyncio.sleep(4.0)
 
     async def execute_search(self, page) -> None:
-        logger.info("[EaseMyTripWorker] Waiting for flight search API response...")
+        from playwright.async_api import TimeoutError as PlaywrightTimeout
         try:
-            # Click search button if present
-            await page.wait_for_selector("#btnSrch, input[value='Search'], input[value='SEARCH']", timeout=10000)
-            search_btn = await page.query_selector("#btnSrch, input[value='Search'], input[value='SEARCH']")
-            if search_btn:
-                logger.info("[EaseMyTripWorker] Clicking Search button to load flight data...")
-                await search_btn.click()
-        except Exception as e:
-            logger.debug(f"[EaseMyTripWorker] Search button check: {e}")
-
+            await page.wait_for_function(self.LISTINGS_READY,timeout=3000)
+        except PlaywrightTimeout:
+            # This site's direct URL pre-fills criteria but sometimes needs submission.
+            button = page.locator('#btnSrch, input[value="Search"], input[value="SEARCH"]').first
+            if await button.count() and await button.is_visible():
+                await button.click(timeout=8000)
         try:
-            # Wait up to 25 seconds for the API interception event
-            await asyncio.wait_for(self._interception_event.wait(), timeout=25.0)
-            logger.info("[EaseMyTripWorker] Intercepted flight search API response successfully.")
-        except asyncio.TimeoutError:
-            logger.warning("[EaseMyTripWorker] API response interception timed out, waiting for DOM elements instead.")
-            try:
-                # Wait for common flight rows selectors on EaseMyTrip
-                await page.wait_for_selector(".flight-list, .row-grid, div[id*='ResultDiv']", timeout=15000)
-                await asyncio.sleep(2.0)  # Extra settle time
-            except Exception:
-                logger.warning("[EaseMyTripWorker] Settle selector timeout, trying to parse anyway.")
+            await page.wait_for_function(self.LISTINGS_READY,timeout=35000)
+        except PlaywrightTimeout:
+            logger.warning('Flight prices unavailable; checking page for blocks or layout changes.')
+        from provider_status import page_problem
+        problem=page_problem(await page.inner_text('body'),page.url,getattr(self,'_http_failures',[]))
+        if problem:
+            raise problem
 
     async def parse_search_results(self, page) -> list[dict]:
-        logger.info("[EaseMyTripWorker] Extracting flight options...")
-        
-        try:
-            page.remove_listener("response", self._response_handler)
-        except Exception:
-            pass
-
-        # 1. Attempt API Interception Parsing
-        if self._intercepted_responses:
-            logger.info(f"[EaseMyTripWorker] Attempting to parse {len(self._intercepted_responses)} intercepted responses...")
-            flights = []
-            for url, data in self._intercepted_responses:
-                try:
-                    parsed = self.find_flight_arrays(data)
-                    if parsed:
-                        flights.extend(parsed)
-                except Exception as e:
-                    logger.error(f"[EaseMyTripWorker] Error parsing API data: {e}")
-            
-            if flights:
-                deduped = []
-                seen = set()
-                for f in flights:
-                    key = (f["flight_number"], f["departure_time"], f["base_price"])
-                    if key not in seen:
-                        seen.add(key)
-                        deduped.append(f)
-                logger.info(f"[EaseMyTripWorker] Parsed {len(deduped)} unique flights successfully via API interception.")
-                return deduped
-
-        # 2. Attempt Classless DOM Extraction
-        flights = await self._parse_via_dom(page)
-        if flights:
-            logger.info(f"[EaseMyTripWorker] Parsed {len(flights)} flights successfully via DOM.")
-            return flights
-
-        # 2. Fallback to Screenshot + LLM Vision
-        logger.warning("[EaseMyTripWorker] DOM parsing returned 0 flights. Falling back to LLM Vision...")
-        try:
-            flights = await self._parse_via_vision(page)
-            if flights:
-                logger.info(f"[EaseMyTripWorker] Parsed {len(flights)} flights successfully via LLM Vision.")
-                return flights
-        except Exception as e:
-            logger.error(f"[EaseMyTripWorker] LLM Vision parsing failed: {e}")
-
-        # 3. Return empty list on failure (Phase 0)
-        logger.warning("[EaseMyTripWorker] All extraction strategies failed. Returning empty list.")
-        return []
+        # Generic recursive JSON matching and vision estimates are retained below
+        # only for research tests. Live fares require exact visible card evidence.
+        return await self._parse_via_dom(page)
 
     async def _parse_via_dom(self, page) -> list[dict]:
-        """Extract flights from DOM using EaseMyTrip layout markers."""
-        js_extractor = """
-        () => {
-            const results = [];
-            // Select EaseMyTrip listing card elements
-            const cards = Array.from(document.querySelectorAll('.flight-list, .row-grid, div[id*="ResultDiv"], [id*="row-"], .fltResult'));
-            
-            for (const card of cards) {
-                const text = card.innerText || "";
-                if (!text.includes("₹") && !text.includes("Rs") && !text.toLowerCase().includes("book") && !text.toLowerCase().includes("lock")) continue;
+        from .listing_parser import parse_cards
+        if hasattr(self, '_trip'):
+            from datetime import date
+            import re
+            trip = self._trip
+            criteria = await page.evaluate('''() => ({day:document.querySelector('#ddate')?.value,
+                origin:document.querySelector('#FromSector_show')?.value,
+                destination:document.querySelector('#Editbox13_show')?.value,
+                cabin:document.querySelector('#optClass')?.selectedOptions[0]?.textContent})''')
+            text = await page.inner_text('body')
+            adults = re.search(r'\b(\d+)\s+Travellers?\b',text,re.I)
+            expected_cabin = trip['cabin_class'].replace('_','').lower()
+            if (criteria['day'] != date.fromisoformat(trip['departure_date']).strftime('%d/%m/%Y')
+                or trip['origin'] not in (criteria['origin'] or '') or trip['destination'] not in (criteria['destination'] or '')
+                or not adults or int(adults[1]) != trip['passenger_count']
+                or (criteria['cabin'] or '').replace(' ','').lower() != expected_cabin):
+                raise ValueError('EaseMyTrip did not confirm the requested airports, date, adults and cabin.')
+        return await parse_cards(page, '.main-bo-lis, .flight-list-item')
 
-                const lines = text.split('\\n').map(l => l.trim()).filter(l => l.length > 0);
-                if (lines.length < 3) continue;
-
-                // Extract Price
-                let priceVal = 0;
-                const priceRegex = /(?:₹|Rs\\.?|\\$)?\\s*([\\d,]+)/;
-                let possiblePrices = [];
-                for (let i = 0; i < lines.length; i++) {
-                    const line = lines[i];
-                    const lowLine = line.toLowerCase();
-                    
-                    // Skip lock prices or promo/discount lines
-                    if (lowLine.includes("lock") || (i > 0 && lines[i-1].toLowerCase().includes("lock"))) {
-                        continue;
-                    }
-                    if (lowLine.includes("off") || lowLine.includes("save") || lowLine.includes("discount") || 
-                        lowLine.includes("cashback") || lowLine.includes("coupon") || lowLine.includes("promo") || 
-                        lowLine.includes("fee") || lowLine.includes("tax") || lowLine.includes("gst") || 
-                        lowLine.includes("charge") || lowLine.includes("seat") || lowLine.includes("extra")) {
-                        continue;
-                    }
-                    
-                    // Clean line of currency/spaces/commas
-                    const cleanLine = lowLine.replace(/[₹\$\s,]/g, "");
-                    // If it contains letters (except 'rs') or colons, skip (e.g. times, flight numbers, duration)
-                    if (cleanLine.match(/[a-z:]/i)) {
-                        if (!cleanLine.startsWith("rs")) {
-                            continue;
-                        }
-                    }
-                    
-                    const match = line.match(priceRegex);
-                    if (match) {
-                        const parsed = parseFloat(match[1].replace(/,/g, ''));
-                        if (parsed > 0) {
-                            possiblePrices.push(parsed);
-                        }
-                    }
-                }
-                
-                // Filter prices to find actual fares (usually >= 1200)
-                const fares = possiblePrices.filter(p => p >= 1200);
-                if (fares.length > 0) {
-                    priceVal = fares[0]; // first one that looks like a fare
-                } else if (possiblePrices.length > 0) {
-                    priceVal = possiblePrices[0]; // fallback to any matched number
-                } else {
-                    // last resort: search all lines with literal currency symbol
-                    for (const line of lines) {
-                        const match = line.match(/(?:₹|Rs\\.?|\\$)\\s*([\\d,]+)/);
-                        if (match) {
-                            priceVal = parseFloat(match[1].replace(/,/g, ''));
-                            break;
-                        }
-                    }
-                }
-                if (!priceVal) continue;
-
-                // Extract Stops
-                let stops = 0;
-                if (text.toLowerCase().includes("nonstop") || text.toLowerCase().includes("non-stop") || text.toLowerCase().includes("non stop")) {
-                    stops = 0;
-                } else if (text.toLowerCase().includes("1 stop")) {
-                    stops = 1;
-                } else if (text.toLowerCase().includes("2 stops")) {
-                    stops = 2;
-                }
-
-                // Extract Airline
-                const knownAirlines = ["IndiGo", "Air India", "Vistara", "Akasa Air", "SpiceJet", "Alliance Air", "Air India Express", "FlyBig", "Star Air"];
-                let airline = "Unknown";
-                for (const line of lines) {
-                    const matched = knownAirlines.find(a => line.toLowerCase() === a.toLowerCase() || line.includes(a));
-                    if (matched) {
-                        airline = matched;
-                        break;
-                    }
-                }
-                
-                // Extract Times
-                let departure_time = "06:00";
-                let arrival_time = "08:15";
-                const timeRegex = /(\\d{2}:\\d{2})\\s*(?:–|-|\\n)?\\s*(\\d{2}:\\d{2})/;
-                const timeMatch = text.match(timeRegex);
-                if (timeMatch) {
-                    departure_time = timeMatch[1].trim();
-                    arrival_time = timeMatch[2].trim();
-                }
-
-                // Extract Duration
-                let duration = "2h 15m";
-                const durationRegex = /(\\d+h\\s*\\d*m?)/i;
-                const durMatch = text.match(durationRegex);
-                if (durMatch) {
-                    duration = durMatch[1].trim();
-                }
-
-                // Extract real flight number from card text or generate deterministically
-                const flightNumRegex = /\\b(6E|AI|UK|SG|QP|I5|IX|S5|2T|G8)\\s*[-]?\\s*(\\d{3,4})\\b/i;
-                const fnMatch = text.match(flightNumRegex);
-                let flight_number = "";
-                if (fnMatch) {
-                    flight_number = fnMatch[1].toUpperCase() + "-" + fnMatch[2];
-                } else {
-                    const cleanTime = (departure_time + arrival_time).replace(/[^0-9]/g, '');
-                    const prefixMap = { "indigo": "6E", "air india": "AI", "vistara": "UK", "akasa": "QP", "spicejet": "SG" };
-                    let prefix = "FL";
-                    for (const k in prefixMap) {
-                        if (airline.toLowerCase().includes(k)) {
-                            prefix = prefixMap[k];
-                            break;
-                        }
-                    }
-                    flight_number = prefix + "-" + (cleanTime || "0000");
-                }
-
-                results.push({
-                    flight_number,
-                    airline,
-                    departure_time,
-                    arrival_time,
-                    duration,
-                    stops,
-                    base_price: priceVal
-                });
-            }
-            return results;
-        }
-        """
-        try:
-            return await page.evaluate(js_extractor)
-        except Exception as e:
-            logger.error(f"[EaseMyTripWorker] DOM evaluation failed: {e}")
-            return []
-
-    async def _parse_via_vision(self, page) -> list[dict]:
-        """Convert page to screenshot and query LLM vision model to parse flight results."""
-        screenshot_bytes = await page.screenshot(type="jpeg", quality=40)
-        image_b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
-
-        prompt = """
-        Inspect this EaseMyTrip flight search results screen.
-        Identify and extract the top 3 cheapest flight options.
-        For each flight, output a JSON object containing:
-        - flight_number: (e.g. 6E-201, generate based on airline if not explicitly visible)
-        - airline: (e.g. IndiGo, Air India, Vistara)
-        - departure_time: (e.g. 06:15)
-        - arrival_time: (e.g. 08:30)
-        - duration: (e.g. 2h 15m)
-        - stops: (integer, 0 for nonstop, 1, 2)
-        - base_price: (numeric value, e.g. 5400)
-
-        Return strictly a JSON array of objects with these keys. No markdown backticks, no wrapping in ```json, and no other text.
-        """
-        
-        client, model, key_str = api_key_manager.get_client("brute")
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are a professional browser automation helper with vision capabilities. Output strictly valid JSON arrays."},
-                {"role": "user", "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {
-                        "url": f"data:image/jpeg;base64,{image_b64}"
-                    }}
-                ]}
-            ],
-            temperature=0.0
-        )
-        res_text = response.choices[0].message.content.strip()
-        clean_res = res_text.replace("```json", "").replace("```", "").strip()
-        flights = json.loads(clean_res)
-        
-        for f in flights:
-            f["base_price"] = float(f.get("base_price", 5000))
-        return flights
-
-    # ── No-Op implementations for ticketing automation pipeline phases ──
-    async def select_flight(self, page, flight: dict) -> None:
-        pass
 
     async def fill_passenger_details(self, page) -> None:
         pass
@@ -603,127 +391,113 @@ class EaseMyTripWorker(BaseWorker):
         pass
 
     async def is_at_checkout(self, page) -> bool:
-        return True
+        data=await self.read_checkout_total(page)
+        return bool(data and data.get('stage')=='payment') or await super().is_at_checkout(page)
+
+    async def read_selected_payment(self,page):
+        active=page.locator('.pay-m .pay-mm li.d4.blk-cls')
+        panel=page.locator('.pay-m .upi-m')
+        if await active.count()==1 and await active.is_visible() and await panel.count()==1 and await panel.is_visible():
+            return dict(method='UPI',banks=[],label='EaseMyTrip selected UPI payment tab')
+        return await super().read_selected_payment(page)
+
 
 
 
     async def detect_captcha(self, page) -> bool:
-        return False
+        return await super().detect_captcha(page)
+
 
     async def health_check(self, page) -> bool:
         return True
 
     async def scrape_onsite_coupons(self, page) -> list[dict]:
-        """Scrape coupon codes visible on the EaseMyTrip checkout screen."""
-        from datetime import datetime, timedelta
-        import re
-        
-        js_extractor = """
-        () => {
-            const coupons = [];
-            const cards = Array.from(document.querySelectorAll('.couponItem, .coupon-list-item, .promo-item, .offer-card, [class*="coupon"], [class*="promo"]'));
-            
-            const seen = new Set();
-            const codeRegex = /^[A-Z0-9]{3,15}$/;
-            
-            for (const card of cards) {
-                const text = card.innerText || "";
-                let code = "";
-                const codeEl = card.querySelector('.couponCode, .promo-code, [class*="code"], strong, b');
-                if (codeEl) {
-                    code = codeEl.innerText.trim().toUpperCase();
-                }
-                
-                if (!code || !codeRegex.test(code) || code === "APPLY" || code === "REMOVE") {
-                    const words = text.split(/\\s+/);
-                    for (const w of words) {
-                        const cleanW = w.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-                        if (codeRegex.test(cleanW) && cleanW !== "APPLY" && cleanW !== "REMOVE" && cleanW !== "COUPON" && cleanW !== "PROMO" && cleanW.length >= 3) {
-                            code = cleanW;
-                            break;
-                        }
-                    }
-                }
-                
-                if (code && !seen.has(code) && codeRegex.test(code) && code !== "APPLY" && code !== "REMOVE") {
-                    seen.add(code);
-                    
-                    let desc = "";
-                    const descEl = card.querySelector('.couponDescription, .promo-desc, [class*="desc"], [class*="detail"]');
-                    if (descEl) {
-                        desc = descEl.innerText.trim();
-                    } else {
-                        desc = text.replace(code, "").replace(/\\n/g, " ").trim();
-                    }
-                    
-                    coupons.push({
-                        "platform": "easemytrip",
-                        "code": code,
-                        "description": desc || `EMT checkout promo code ${code}`
-                    });
-                }
-            }
-            return coupons;
-        }
-        """
-        try:
-            results = await page.evaluate(js_extractor)
-            parsed_coupons = []
-            today = datetime.now()
-            expiry = (today + timedelta(days=60)).strftime("%Y-%m-%d")
-            
-            for c in results:
-                desc = c["description"]
-                code = c["code"]
-                
-                discount_type = "FLAT"
-                discount_value = 100.0
-                min_booking_value = 0.0
-                bank_restriction = None
-                card_type = "ANY"
-                
-                pct_match = re.search(r'(\d+)\s*%', desc)
-                if pct_match:
-                    discount_type = "PERCENT"
-                    discount_value = float(pct_match.group(1))
-                else:
-                    flat_match = re.search(r'(?:Rs\.?|₹|Rs)\s*(\d+[\d,]*)', desc, re.IGNORECASE)
-                    if flat_match:
-                        discount_type = "FLAT"
-                        discount_value = float(flat_match.group(1).replace(",", ""))
-                
-                min_match = re.search(r'(?:min(?:imum)?\b.*?|above\s+|spend\s+)(?:Rs\.?|₹|Rs)?\s*(\d+[\d,]*)', desc, re.IGNORECASE)
-                if min_match:
-                    min_booking_value = float(min_match.group(1).replace(",", ""))
-                    
-                known_banks = ["HDFC", "ICICI", "SBI", "AXIS", "HSBC", "KOTAK", "CITI", "YES", "BOB"]
-                for b in known_banks:
-                    if re.search(r'\b' + b + r'\b', desc, re.IGNORECASE):
-                        bank_restriction = b
-                        break
-                        
-                if re.search(r'\bcredit\b', desc, re.IGNORECASE):
-                    card_type = "CREDIT"
-                elif re.search(r'\bdebit\b', desc, re.IGNORECASE):
-                    card_type = "DEBIT"
-                    
-                parsed_coupons.append({
-                    "platform": "easemytrip",
-                    "code": code,
-                    "description": desc,
-                    "bank_restriction": bank_restriction,
-                    "card_type": card_type,
-                    "discount_type": discount_type,
-                    "discount_value": discount_value,
-                    "min_booking_value": min_booking_value,
-                    "valid_from": today.strftime("%Y-%m-%d"),
-                    "valid_until": expiry,
-                    "is_active": 1,
-                    "source": "scraped",
-                    "source_type": "platform_native",
-                    "trust_score": 0.95
-                })
-            return parsed_coupons
-        except Exception as e:
-            logger.warning(f"[EaseMyTripWorker] Failed to scrape onsite coupons: {e}")
-            return []
+        from offer_parser import scrape_published_offers
+        more=page.locator('.offer_popup_btn').filter(has_text='View All Coupons')
+        if await more.count() and await more.first.is_visible():
+            await more.first.click(timeout=4000)
+            await page.wait_for_timeout(500)
+        offers=await scrape_published_offers(page, self.platform_id)
+        # Public View All Coupons is a dialog; close it before handoff/testing.
+        close=page.locator('#cpnpop .fr_close_popup')
+        if await close.count() and await close.first.is_visible():
+            await close.first.click(timeout=3000)
+        return offers
+
+    async def read_checkout_total(self,page):
+        # EMT renders the INR symbol as a CSS icon, so innerText drops it.
+        # Require that exact visible symbol beside the labeled grand total.
+        result=await page.evaluate(r'''() => {
+            const value=document.querySelector('#spnGrndTotal');
+            const parent=value?.closest('.pr');
+            if (!value?.getBoundingClientRect().width || !parent || !/Grand Total/i.test(parent.innerText)) return null;
+            const currency=parent.querySelector('i.CurrncyCD_Rs');
+            if (!currency?.getBoundingClientRect().width) return null;
+            const raw=value.innerText.trim();
+            if (!/^(?:\d+|\d{1,3}(?:,\d{3})+|\d{1,2}(?:,\d{2})*,\d{3})(?:\.\d{1,2})?$/.test(raw)) return null;
+            const total=Number(raw.replace(/,/g,''));
+            const paymentTotals=[...document.querySelectorAll('.pay-m .pr-m2')].filter(el=>el.getBoundingClientRect().width>0).map(el=>Number(el.innerText.trim().replace(/,/g,'')));
+            if (paymentTotals.some(amount=>amount!==total)) return null;
+            const fees=[...document.querySelectorAll('.pay-m .n-re')].filter(el=>el.getBoundingClientRect().width>0).map(el=>({label:'Convenience fee',amount:Number(el.querySelector('[ng-bind="ConvenienceFee"]')?.innerText?.replace(/,/g,''))})).filter(f=>Number.isFinite(f.amount));
+            return Number.isFinite(total) && total>0 ? {total,fees,currency:'INR',stage:paymentTotals.length?'payment':'review'} : null;
+        }''')
+        native=page.locator('#spnGrndTotal')
+        if await native.count() and await native.first.is_visible():
+            return result
+        return await super().read_checkout_total(page)
+
+    async def enter_coupon_code(self,page,code):
+        if not isinstance(code,str) or not __import__('re').fullmatch(r'[A-Z0-9_-]{2,40}',code):
+            raise ValueError('Malformed coupon code; refusing browser interaction')
+        field=page.locator('#txtCouponCode')
+        if await field.count() and await field.is_visible():
+            await field.fill(code)
+        else:
+            await super().enter_coupon_code(page,code)
+
+    async def get_applied_coupon_code(self,page):
+        label=page.locator('#divCouponApplied #spnCouponDisplay')
+        if await label.count() and await label.is_visible():
+            return (await label.inner_text()).strip().upper()
+        return await super().get_applied_coupon_code(page)
+
+    async def check_coupon_applied(self,page):
+        error=page.locator('#divCouponErrMessage')
+        if await error.count() and await error.is_visible() and (await error.inner_text()).strip():
+            return dict(success=False,error=(await error.inner_text()).strip())
+        container=page.locator('#divCouponApplied')
+        if await container.count() and await container.is_visible():
+            code=await self.get_applied_coupon_code(page)
+            remove=container.locator('[ng-click="RemoveCouponeMob()"]')
+            if code and await remove.count() and await remove.is_visible():
+                return dict(success=True,code=code,error=None)
+        return await super().check_coupon_applied(page)
+
+    async def get_coupon_validation_text(self,page):
+        code=await self.get_applied_coupon_code(page)
+        if code and __import__('re').fullmatch('[A-Z0-9_-]{2,40}',code):
+            card=page.locator('#lblCpn'+code+'VM').first
+            if await card.count():
+                return await card.text_content() or ''
+        return ''
+
+    async def click_apply_coupon(self,page):
+        button=page.locator('#spnApply')
+        if await button.count() and await button.is_visible():
+            await button.click(timeout=4000)
+            await page.wait_for_timeout(1200)
+        else:
+            await super().click_apply_coupon(page)
+
+    async def clear_coupon_field(self,page):
+        remove=page.locator('#spnCpnRemoveVM, [ng-click="RemoveCouponeMob()"], [ng-click="RemoveCoupone()"]')
+        for button in await remove.all():
+            if await button.is_visible():
+                await button.click(timeout=4000)
+                await page.wait_for_timeout(800)
+                break
+        field=page.locator('#txtCouponCode')
+        if await field.count() and await field.is_visible():
+            await field.fill('')
+        else:
+            await super().clear_coupon_field(page)

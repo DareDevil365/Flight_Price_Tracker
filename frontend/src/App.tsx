@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useSearchStore, useResultStore } from "./store";
 
@@ -6,12 +6,11 @@ import Sidebar from "./components/Sidebar";
 import SearchCockpit from "./components/SearchCockpit";
 import ResultsRanker from "./components/ResultsRanker";
 import SearchHistory from "./components/SearchHistory";
-import PriceHistory from "./components/PriceHistory";
-import Watchlist from "./components/Watchlist";
-import ManageWebsites from "./components/ManageWebsites";
-import Settings from "./components/Settings";
-
-import LearningDashboard from "./components/LearningDashboard";
+const PriceHistory = lazy(() => import("./components/PriceHistory"));
+const RedRoom = lazy(() => import("./components/RedRoom"));
+const ManageWebsites = lazy(() => import("./components/ManageWebsites"));
+const Settings = lazy(() => import("./components/Settings"));
+const LearningDashboard = lazy(() => import("./components/LearningDashboard"));
 
 type Tab = "search" | "results" | "history" | "price_intel" | "watchlist" | "websites" | "settings" | "learning";
 
@@ -21,14 +20,17 @@ export default function App() {
   const setActiveTab = (tab: Tab) => useSearchStore.getState().setActiveTab(tab);
 
   const searchStatus = useSearchStore((s) => s.status);
+  const searchId = useSearchStore(s => s.searchId);
+  const shownSearch = useRef<string | null>(null);
   const results = useResultStore((s) => s.results);
 
   // Auto-switch to results when search completes
   useEffect(() => {
-    if (searchStatus === "completed" && results.length > 0) {
+    if (searchId && searchStatus === "completed" && results.length > 0 && shownSearch.current !== searchId) {
+      shownSearch.current = searchId;
       setActiveTab("results");
     }
-  }, [searchStatus, results]);
+  }, [searchStatus, searchId, results]);
 
   const renderTab = () => {
     switch (activeTab) {
@@ -41,13 +43,13 @@ export default function App() {
       case "price_intel":
         return <PriceHistory sendMessage={sendMessage} />;
       case "watchlist":
-        return <Watchlist sendMessage={sendMessage} />;
+        return <RedRoom sendMessage={sendMessage} />;
       case "learning":
         return <LearningDashboard sendMessage={sendMessage} />;
       case "websites":
         return <ManageWebsites sendMessage={sendMessage} />;
       case "settings":
-        return <Settings />;
+        return <Settings sendMessage={sendMessage} />;
       default:
         return <SearchCockpit sendMessage={sendMessage} />;
     }
@@ -68,7 +70,7 @@ export default function App() {
         resultCount={results.length}
       />
       <div className="content-area">
-        {renderTab()}
+        <Suspense fallback={<p>Loading…</p>}>{renderTab()}</Suspense>
       </div>
     </div>
   );

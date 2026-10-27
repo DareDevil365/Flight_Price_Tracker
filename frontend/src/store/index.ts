@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { localDate } from '../dateUtils';
 import type { 
   TripProfile, 
   FinancialProfile, 
@@ -13,6 +14,7 @@ import type {
   SmartSuggestion,
   DateAlternative
 } from "../types";
+import type { FareQuote, BookingPrediction, JournalEntry } from '../types';
 
 
 // ── Search Store ──
@@ -37,12 +39,12 @@ export const useSearchStore = create<SearchStore>((set) => ({
     tripType: "one_way",
     origin: null,
     destination: null,
-    departureDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+    departureDate: localDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)),
     preferredTime: "ANY",
     passengerCount: 1,
     cabinClass: "ECONOMY",
   },
-  platforms: ["makemytrip", "easemytrip", "cleartrip", "yatra", "ixigo", "paytm", "google_flights"],
+  platforms: ["makemytrip", "easemytrip", "cleartrip", "google_flights"],
   activeTab: "search",
   setSearchId: (searchId) => set({ searchId }),
   setStatus: (status) => set({ status }),
@@ -86,11 +88,33 @@ export const useBotStore = create<BotStore>((set) => ({
 
 // ── Result Store ──
 interface ResultStore {
+  googleBooking:Record<string,import('../types').GoogleBookingReport>;
+  setGoogleBooking:(report:import('../types').GoogleBookingReport)=>void;
+  dealOptions:import('../types').DealOptions|null;
+  setDealOptions:(value:import('../types').DealOptions|null)=>void;
   results: SearchResult[];
+  brain: import('../types').BrainReport | null;
+  brainError: string | null;
+  alternatives: import('../types').FlightAlternative[];
+  redRoomItems: import('../types').RedRoomItem[];
+  notifications: import('../types').SavedNotification[];
+  setBrain: (brain:import('../types').BrainReport)=>void;
+  setAlternatives: (alternatives:import('../types').FlightAlternative[])=>void;
+  setRedRoom: (items:import('../types').RedRoomItem[])=>void;
+  setNotifications: (items:import('../types').SavedNotification[])=>void;
+  couponTrackRecord:Record<string,import('../types').CouponAuditRun[]>;
+  setCouponTrackRecord:(platform:string,runs:import('../types').CouponAuditRun[])=>void;
+  offers: Record<string, import('../types').PublishedOffer[]>;
+  offerStatus: string;
+  setOffers: (platform:string,offers:import('../types').PublishedOffer[])=>void;
+  setOfferStatus: (status:string)=>void;
   watchlist: WatchlistItem[];
   handoffStatus: Record<string, "idle" | "pending" | "success" | "failed">;
-  historyData: any[];
-  prediction: any | null;
+  checkoutStatus: Record<string, {status: 'running' | 'success' | 'failed'; message: string}>;
+  setCheckoutStatus: (sessionId: string, status: ResultStore['checkoutStatus'][string]) => void;
+  historyData: FareQuote[];
+  intelligenceRequestId: string | null;
+  prediction: BookingPrediction | null;
   suggestions: SmartSuggestion | null;
   dateAlternatives: DateAlternative[];
   highlightedFlightId: string | null;
@@ -98,8 +122,8 @@ interface ResultStore {
   addResult: (result: SearchResult) => void;
   setWatchlist: (items: WatchlistItem[]) => void;
   setHandoffStatus: (sessionId: string, status: ResultStore["handoffStatus"][string]) => void;
-  setHistoryData: (data: any[]) => void;
-  setPrediction: (prediction: any) => void;
+  setHistoryData: (data: FareQuote[]) => void;
+  setPrediction: (prediction: BookingPrediction | null) => void;
   setSuggestions: (suggestions: SmartSuggestion) => void;
   setDateAlternatives: (dateAlternatives: DateAlternative[]) => void;
   setHighlightedFlightId: (id: string | null) => void;
@@ -108,10 +132,32 @@ interface ResultStore {
 
 
 export const useResultStore = create<ResultStore>((set) => ({
+  googleBooking:{},
+  setGoogleBooking:(report)=>set(state=>({googleBooking:{...state.googleBooking,[report.resultId]:report}})),
+  dealOptions:null,
+  setDealOptions:(dealOptions)=>set({dealOptions}),
   results: [],
+  brain: null,
+  brainError: null,
+  alternatives: [],
+  redRoomItems: [],
+  notifications: [],
+  setBrain: (brain)=>set({brain,brainError:null}),
+  setAlternatives: (alternatives)=>set({alternatives}),
+  setRedRoom: (redRoomItems)=>set({redRoomItems}),
+  setNotifications: (notifications)=>set({notifications}),
+  couponTrackRecord:{},
+  setCouponTrackRecord:(platform,runs)=>set(state=>({couponTrackRecord:{...state.couponTrackRecord,[platform]:runs}})),
+  offers: {},
+  offerStatus: '',
+  setOffers: (platform,offers)=>set(state=>({offers:{...state.offers,[platform]:offers}})),
+  setOfferStatus: (offerStatus)=>set({offerStatus}),
   watchlist: [],
   handoffStatus: {},
+  checkoutStatus: {},
+  setCheckoutStatus: (sessionId, status) => set(state => ({checkoutStatus: {...state.checkoutStatus, [sessionId]: status}})),
   historyData: [],
+  intelligenceRequestId: null,
   prediction: null,
   suggestions: null,
   dateAlternatives: [],
@@ -131,7 +177,7 @@ export const useResultStore = create<ResultStore>((set) => ({
   setSuggestions: (suggestions) => set({ suggestions }),
   setDateAlternatives: (dateAlternatives) => set({ dateAlternatives }),
   setHighlightedFlightId: (highlightedFlightId) => set({ highlightedFlightId }),
-  clearResults: () => set({ results: [], handoffStatus: {}, historyData: [], prediction: null, suggestions: null, dateAlternatives: [], highlightedFlightId: null })
+  clearResults: () => set({ results: [], googleBooking:{}, dealOptions:null, alternatives: [], brain: null, brainError:null, handoffStatus: {}, checkoutStatus: {}, historyData: [], intelligenceRequestId:null, prediction: null, suggestions: null, dateAlternatives: [], highlightedFlightId: null })
 }));
 
 
@@ -141,12 +187,12 @@ interface SettingsStore {
   cloak: CloakProfile;
   updateFinancial: (update: Partial<FinancialProfile>) => void;
   updateCloak: (update: Partial<CloakProfile>) => void;
-  loadSettings: (payload: { financial?: any; cloak?: any }) => void;
+  loadSettings: (payload: { financial?: Partial<FinancialProfile>; cloak?: Partial<CloakProfile> }) => void;
 }
 
 export const useSettingsStore = create<SettingsStore>((set) => ({
   financial: {
-    whitelistedBanks: ["SBI", "HDFC", "ICICI"],
+    whitelistedBanks: [],
     blacklistedBanks: [],
     allowedCardTypes: ["CREDIT", "DEBIT", "UPI"],
     allowEMI: false,
@@ -155,10 +201,7 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
     allowAppOnly: false,
     maxFinalPrice: null,
     customInstructions: "",
-    cardRewardRates: [
-      { bank: "HDFC", rate: 3.3 },
-      { bank: "SBI", rate: 1.25 }
-    ]
+    cardRewardRates: []
   },
   cloak: {
     proxyMode: "OFF",
@@ -166,7 +209,7 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
     humanSimIntensity: "MEDIUM",
     requestCooldownSec: 2.0,
     fingerprintRotation: true,
-    maxConcurrentBots: 4,
+    maxConcurrentBots: 3,
     engine: "playwright"
   },
   updateFinancial: (update) => set((state) => ({ financial: { ...state.financial, ...update } })),
@@ -230,42 +273,45 @@ export const usePlatformStore = create<PlatformStore>((set) => ({
 
 // ── Learning Store ──
 export interface LearningDashboardData {
-  cycle_count: number;
+  data_source?: string;
+  provider_run_count?: number | null;
+  cycle_count: number | null;
   coupon_stats: {
-    total_tracked: number;
-    dead_coupons: number;
-    avg_success_rate: number;
-    avg_trust_score: number;
+    available?: boolean;
+    run_count?: number | null;
+    trial_count?: number | null;
+    review_accepted_trials?: number | null;
+    checkout_accepted_trials?: number | null;
+    total_tracked: number | null;
+    dead_coupons: number | null;
+    avg_success_rate: number | null;
+    avg_trust_score: number | null;
   };
   pipeline_health: Record<string, {
     total: number;
     successes: number;
     success_rate: number;
-    avg_latency_ms: number;
+    avg_latency_ms: number | null;
   }>;
   prediction_accuracy: {
-    total_audited: number;
-    avg_mape: number;
+    available?: boolean;
+    total_audited: number | null;
+    avg_mape: number | null;
   };
   suggestion_stats: Record<string, {
     shown: number;
     clicked: number;
     accepted: number;
   }>;
-  recent_journal: Array<{
-    category: string;
-    action: string;
-    reason: string;
-    timestamp: string;
-  }>;
-  improvements_count: number;
+  recent_journal: JournalEntry[];
+  improvements_count: number | null;
 }
 
 interface LearningStore {
   dashboardData: LearningDashboardData | null;
-  journal: any[];
+  journal: JournalEntry[];
   setDashboardData: (data: LearningDashboardData) => void;
-  setJournal: (journal: any[]) => void;
+  setJournal: (journal: JournalEntry[]) => void;
 }
 
 export const useLearningStore = create<LearningStore>((set) => ({
@@ -274,5 +320,3 @@ export const useLearningStore = create<LearningStore>((set) => ({
   setDashboardData: (dashboardData) => set({ dashboardData }),
   setJournal: (journal) => set({ journal }),
 }));
-
-

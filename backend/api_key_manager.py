@@ -35,14 +35,20 @@ class APIKeyManager:
 
     def _load_keys(self):
         """Parse key pool from environment variables."""
-        keys_env = os.getenv("GEMINI_API_KEYS")
         raw_keys = []
-        if keys_env:
-            raw_keys = [k.strip() for k in keys_env.split(",") if k.strip()]
-        else:
-            single = os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
-            if single:
-                raw_keys = [single]
+
+        # Load from all potential comma-separated key lists
+        for env_var in ["GEMINI_API_KEYS", "GROQ_API_KEYS", "OPENAI_API_KEYS"]:
+            val = os.getenv(env_var)
+            if val:
+                raw_keys.extend([k.strip() for k in val.split(",") if k.strip()])
+
+        # Fallback to single keys if no lists are provided
+        if not raw_keys:
+            for env_var in ["GEMINI_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY"]:
+                val = os.getenv(env_var)
+                if val:
+                    raw_keys.append(val.strip())
 
         # Deduplicate
         seen = set()
@@ -60,6 +66,7 @@ class APIKeyManager:
                 masked = f"{k[:10]}...{k[-5:]}"
 
             is_gemini = k.startswith(("AIzaSy", "AQ."))
+            is_groq = k.startswith("gsk_")
             
             self.keys.append({
                 "index": idx,
@@ -67,6 +74,7 @@ class APIKeyManager:
                 "masked": masked,
                 "status": "ACTIVE",
                 "is_gemini": is_gemini,
+                "is_groq": is_groq,
                 "exhausted_until": None,
                 "use_count": 0,
                 "failed_count": 0,
@@ -83,6 +91,10 @@ class APIKeyManager:
         - "thinking": gemini-2.5-pro (high-IQ parsing/reasoning)
         """
         self.recharge_keys()
+        if not self.keys:
+            logger.warning("[APIKeyManager] No API keys are configured in the environment. Returning None client fallbacks.")
+            return None, None, None
+
         active_keys = [k for k in self.keys if k["status"] == "ACTIVE"]
 
         if not active_keys:
@@ -122,6 +134,14 @@ class APIKeyManager:
             )
             # Route model
             model = "gemini-2.5-flash" if complexity == "brute" else "gemini-2.5-pro"
+        elif selected_key_info.get("is_groq"):
+            # Groq OpenAI-compatible endpoint
+            client = AsyncOpenAI(
+                api_key=key_str,
+                base_url="https://api.groq.com/openai/v1"
+            )
+            # Route model
+            model = "llama-3.1-8b-instant" if complexity == "brute" else "llama-3.3-70b-specdec"
         else:
             # Real OpenAI
             client = AsyncOpenAI(api_key=key_str)
@@ -129,6 +149,35 @@ class APIKeyManager:
 
         self._trigger_broadcast()
         return client, model, key_str
+
+    async def execute_with_retry(self, complexity: str, api_call_fn):
+        """
+        Execute an API call function using keys from the rotation pool.
+        The `api_call_fn` should be a coroutine function taking (client, model).
+        If the key encounters a rate limit (429), it is marked exhausted, and we rotate/retry.
+        Other errors are raised.
+        """
+        import asyncio
+        max_retries = max(len(self.keys), 3)
+        for attempt in range(max_retries):
+            client, model, key_str = self.get_client(complexity)
+            if not client:
+                raise RuntimeError("No API clients configured in APIKeyManager.")
+            try:
+                result = await api_call_fn(client, model)
+                self.mark_success(key_str)
+                return result
+            except Exception as e:
+                err_str = str(e).lower()
+                is_rate_limit = "429" in err_str or "quota" in err_str or "limit" in err_str or "rate" in err_str or "resource_exhausted" in err_str
+                if is_rate_limit:
+                    self.mark_exhausted(key_str, duration_seconds=30)
+                    logger.warning(f"[APIKeyManager] Key rate-limited. Rotating to another key... (Attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(0.1)
+                else:
+                    logger.error(f"[APIKeyManager] Non-rate-limit exception encountered: {e}")
+                    raise e
+        raise RuntimeError("All API keys in the rotation pool are exhausted or rate-limited.")
 
     def mark_exhausted(self, key_str: str, duration_seconds: int = 60):
         """Mark a specific key as exhausted for a cooling-off period."""

@@ -15,7 +15,10 @@ from loguru import logger
 
 # Add project root to sys path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-sys.path.append(str(PROJECT_ROOT))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+
+from backend.predictor.models import XGBOOST_FEATURE_COLS, impute_all_features
 
 DB_PATH = PROJECT_ROOT / "backend" / "db" / "flight_agent.db"
 CSV_PATH = PROJECT_ROOT / "backend" / "predictor" / "historical_dataset.csv"
@@ -94,11 +97,6 @@ def train_models():
     routes = df["route"].unique()
     logger.info(f"Starting model training for routes: {list(routes)}")
 
-    # Features used by Layer 3 XGBoost
-    feature_cols = ["days_to_departure", "booking_window_percentile", "hour_of_departure", 
-                    "days_since_last_price_drop", "days_to_nearest_public_holiday", 
-                    "destination_peak_season_score", "brent_crude_price_usd", "usd_inr_rate"]
-
     try:
         import xgboost as xgb
         XGB_AVAILABLE = True
@@ -117,27 +115,71 @@ def train_models():
         route_df = df[df["route"] == route].copy()
         logger.info(f"--- Training models for {route} ({len(route_df)} rows) ---")
 
-        # Map training features to prediction names
-        route_df["booking_window_percentile"] = (route_df["days_to_departure"] / 90.0 * 100.0).clip(0, 100)
-        route_df["hour_of_departure"] = 12.0
-        route_df["days_since_last_price_drop"] = 3.0
-        route_df["days_to_nearest_public_holiday"] = route_df["days_to_nearest_festival"]
-        route_df["destination_peak_season_score"] = route_df["seasonality_score"]
-        route_df["brent_crude_price_usd"] = route_df["brent_crude_usd"]
-        route_df["usd_inr_rate"] = route_df["usd_inr"]
-
         # 1. Train XGBoost
         if XGB_AVAILABLE:
             try:
-                X = route_df[feature_cols].astype(float)
+                # Compile features for training using the impute_all_features function
+                features_list = []
+                for _, row_data in route_df.iterrows():
+                    # Parse travel date to get travel month and week
+                    try:
+                        travel_dt = datetime.strptime(row_data["travel_date"], "%Y-%m-%d")
+                        travel_month = travel_dt.month
+                        travel_week = travel_dt.isocalendar().week
+                    except Exception:
+                        travel_dt = datetime.now()
+                        travel_month = 6
+                        travel_week = 26
+
+                    # Parse booking date to get search day of week
+                    try:
+                        booking_dt = datetime.strptime(row_data["booking_date"], "%Y-%m-%d")
+                        search_dow = booking_dt.weekday()
+                    except Exception:
+                        search_dow = 2
+
+                    base_dict = {
+                        "days_to_departure": row_data["days_to_departure"],
+                        "booking_window_percentile": (row_data["days_to_departure"] / 90.0 * 100.0),
+                        "hour_of_departure": 12.0,
+                        "days_since_last_price_drop": 3.0,
+                        "days_to_nearest_public_holiday": row_data["days_to_nearest_festival"],
+                        "destination_peak_season_score": row_data["seasonality_score"],
+                        "brent_crude_price_usd": row_data["brent_crude_usd"],
+                        "usd_inr_rate": row_data["usd_inr"],
+                        "atf_price_india_per_kl": row_data["atf_price_inr_kl"],
+                        "holiday_pressure_score": row_data["festival_impact_weight"],
+                        "month_of_year": travel_month,
+                        "week_of_year": travel_week,
+                        "day_of_week_travel": travel_dt.weekday(),
+                        "day_of_week_search": search_dow
+                    }
+                    imputed = impute_all_features(base_dict)
+                    features_list.append(imputed)
+
+                X = pd.DataFrame(features_list)[XGBOOST_FEATURE_COLS].astype(float)
                 y = route_df["price_inr"].astype(float)
 
-                model = xgb.XGBRegressor(
-                    n_estimators=120,
-                    max_depth=5,
-                    learning_rate=0.07,
-                    random_state=42
-                )
+                # Detect GPU availability
+                xgb_params = {
+                    "n_estimators": 120,
+                    "max_depth": 5,
+                    "learning_rate": 0.07,
+                    "random_state": 42
+                }
+                try:
+                    import numpy as np
+                    test_model = xgb.XGBRegressor(tree_method="hist", device="cuda", n_estimators=1)
+                    test_model.fit(np.array([[1.0]]), np.array([1.0]))
+                    xgb_params["tree_method"] = "hist"
+                    xgb_params["device"] = "cuda"
+                    logger.info(f"GPU acceleration enabled for route {route} model (device='cuda').")
+                except Exception:
+                    xgb_params["tree_method"] = "hist"
+                    xgb_params["device"] = "cpu"
+                    logger.info(f"GPU not available for route {route} model, using CPU.")
+
+                model = xgb.XGBRegressor(**xgb_params)
                 model.fit(X, y)
 
                 model_path = MODELS_DIR / f"xgboost_{route}.pkl"

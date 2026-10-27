@@ -672,25 +672,42 @@ class FeaturePipeline:
             except Exception as e:
                 logger.debug(f"Failed to fetch cheapest fare bucket seats: {e}")
 
-        # Fetch IRCTC Railway Pressure Index (Heuristic fallback)
+        # Fetch IRCTC Railway Pressure Index (Heuristic fallback, with DB lookup first)
         railway_pressure_index = 0.0
         try:
-            import random
-            wl_count = random.randint(10, 80)
-            if is_public_holiday or is_school_vacation:
-                wl_count += random.randint(40, 100)
-            train_wl_status = {"count": wl_count, "status": "WL"}
-            railway_pressure_index = min(1.0, max(wl_count - 50, 0) / 200.0)
-            
-            # Log train waitlist details to observed_prices
+            wl_count = None
             if self.db:
-                observed_at = datetime.now().isoformat()
-                await self.db.db.execute("""
-                    INSERT INTO observed_prices (route_key, airline, observed_at_timestamp, price, fare_class, seats_remaining_hint)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (f"{route_key}_TRAIN", "IRCTC", observed_at, float(wl_count), train_wl_status.get("status", "WL"), wl_count))
-                await self.db.db.commit()
-                logger.info(f"[IRCTCScraper Mock] Logged train waitlist: {wl_count} on {route_key}_TRAIN")
+                try:
+                    wl_query = """
+                        SELECT price FROM observed_prices
+                        WHERE route_key = ? AND airline = 'IRCTC'
+                        ORDER BY observed_at_timestamp DESC LIMIT 1
+                    """
+                    async with self.db.db.execute(wl_query, (f"{route_key}_TRAIN",)) as cur:
+                        row = await cur.fetchone()
+                        if row:
+                            wl_count = int(row[0])
+                            logger.info(f"[FeaturePipeline] Loaded historical train waitlist count: {wl_count} for {route_key}_TRAIN")
+                except Exception as db_err:
+                    logger.debug(f"Failed to query historical train waitlist from DB: {db_err}")
+
+            if wl_count is None:
+                import random
+                wl_count = random.randint(10, 80)
+                if is_public_holiday or is_school_vacation:
+                    wl_count += random.randint(40, 100)
+
+                # Log train waitlist details to observed_prices
+                if self.db:
+                    observed_at = datetime.now().isoformat()
+                    await self.db.db.execute("""
+                        INSERT INTO observed_prices (route_key, airline, observed_at_timestamp, price, fare_class, seats_remaining_hint)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (f"{route_key}_TRAIN", "IRCTC", observed_at, float(wl_count), "WL", wl_count))
+                    await self.db.db.commit()
+                    logger.info(f"[IRCTCScraper Mock] Logged train waitlist: {wl_count} on {route_key}_TRAIN")
+
+            railway_pressure_index = min(1.0, max(wl_count - 50, 0) / 200.0)
         except Exception as e:
             logger.warning(f"IRCTC pressure index fetch/log failed: {e}")
 

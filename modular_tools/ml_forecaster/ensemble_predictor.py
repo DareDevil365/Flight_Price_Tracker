@@ -193,13 +193,26 @@ class ReusableEnsemblePredictor:
             y = df[target_col].astype(float)
             X = df[feature_cols].astype(float)
 
-            # Fit Regressor with conservative defaults
-            model = xgb.XGBRegressor(
-                n_estimators=100,
-                max_depth=5,
-                learning_rate=0.08,
-                random_state=42
-            )
+            # Detect GPU availability
+            xgb_params = {
+                "n_estimators": 100,
+                "max_depth": 5,
+                "learning_rate": 0.08,
+                "random_state": 42
+            }
+            try:
+                test_model = xgb.XGBRegressor(tree_method="hist", device="cuda", n_estimators=1)
+                test_model.fit(np.array([[1.0]]), np.array([1.0]))
+                xgb_params["tree_method"] = "hist"
+                xgb_params["device"] = "cuda"
+                logger.info(f"GPU acceleration enabled for XGBoost model {model_id} (device='cuda').")
+            except Exception:
+                logger.info(f"GPU not available for XGBoost model {model_id}, using CPU (tree_method='hist').")
+                xgb_params["tree_method"] = "hist"
+                xgb_params["device"] = "cpu"
+
+            # Fit Regressor with parameters
+            model = xgb.XGBRegressor(**xgb_params)
             model.fit(X, y)
 
             # Pickle dump

@@ -207,7 +207,7 @@ async def test_error_attribution_classification():
 
 
 @pytest.mark.asyncio
-async def test_optuna_retraining_loop():
+async def test_optuna_retraining_loop(tmp_path):
     """Verify XGBoost global retraining with Optuna optimization executes successfully."""
     async with aiosqlite.connect(":memory:") as conn:
         mock_db = MockDB(conn)
@@ -219,6 +219,8 @@ async def test_optuna_retraining_loop():
 
         from predictor.models import MLModelManager
         models = MLModelManager(mock_db)
+        # Training tests must never overwrite or delete a real user's model file.
+        models.models_dir = str(tmp_path)
         
         # Run XGBoost training which automatically runs Optuna/GridSearch tuning
         model = await models._train_global_xgboost()

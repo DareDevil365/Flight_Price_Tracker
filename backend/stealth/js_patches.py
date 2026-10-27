@@ -163,5 +163,42 @@ window.Error = function(...args) {
 };
 window.Error.prototype = origError.prototype;
 
+// 14. AudioContext fingerprint protection
+const origGetChannelData = AudioBuffer.prototype.getChannelData;
+AudioBuffer.prototype.getChannelData = function(channel) {
+    const data = origGetChannelData.call(this, channel);
+    // Add subtle seeded noise to audio fingerprint data
+    const seed = window.__FINGERPRINT__?.audio_noise_seed || 42;
+    for (let i = 0; i < Math.min(data.length, 1000); i++) {
+        const noise = (((i * 12345 + seed) % 1000) / 10000000000);
+        data[i] += noise;
+    }
+    return data;
+};
+
+const origCopyFromChannel = AudioBuffer.prototype.copyFromChannel;
+AudioBuffer.prototype.copyFromChannel = function(destination, channelNumber, startInChannel) {
+    origCopyFromChannel.call(this, destination, channelNumber, startInChannel);
+    const seed = window.__FINGERPRINT__?.audio_noise_seed || 42;
+    for (let i = 0; i < Math.min(destination.length, 1000); i++) {
+        const noise = (((i * 12345 + seed) % 1000) / 10000000000);
+        destination[i] += noise;
+    }
+};
+
+// 15. Screen parameter spoofing
+const screenWidth = window.__FINGERPRINT__?.screen?.width || [1920, 1440, 1366, 1536][Math.floor(Math.random() * 4)];
+const screenHeight = window.__FINGERPRINT__?.screen?.height || { 1920: 1080, 1440: 900, 1366: 768, 1536: 864 }[screenWidth] || 1080;
+
+Object.defineProperty(window.screen, 'width', { get: () => screenWidth });
+Object.defineProperty(window.screen, 'height', { get: () => screenHeight });
+Object.defineProperty(window.screen, 'availWidth', { get: () => screenWidth });
+Object.defineProperty(window.screen, 'availHeight', { get: () => screenHeight - 40 });
+Object.defineProperty(window.screen, 'colorDepth', { get: () => 24 });
+Object.defineProperty(window.screen, 'pixelDepth', { get: () => 24 });
+
+Object.defineProperty(window, 'outerWidth', { get: () => window.innerWidth + 16 });
+Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight + 80 });
+
 console.log('🛫 Flight Finder stealth patches applied');
 """

@@ -35,6 +35,155 @@ try:
     SHAP_AVAILABLE = True
 except (ImportError, Exception) as e:
     logger.warning(f"SHAP explainer not available: {e}. Using permutation importance fallback.")
+import math
+
+XGBOOST_FEATURE_COLS = [
+    # Cyclical / Temporal
+    "day_of_week_search",
+    "day_of_week_travel",
+    "hour_of_departure",
+    "week_of_year_sin",
+    "week_of_year_cos",
+    "month_of_year_sin",
+    "month_of_year_cos",
+    "hour_sin",
+    "hour_cos",
+    "is_weekend_travel",
+    "is_tuesday_wednesday_search",
+    "days_to_departure",
+    "days_since_last_price_drop",
+    "booking_window_percentile",
+
+    # Festive / Calendar
+    "is_public_holiday",
+    "days_to_nearest_public_holiday",
+    "is_school_vacation_period",
+    "is_exam_period",
+    "is_wedding_season",
+    "is_long_weekend",
+    "is_bridge_holiday",
+    "holiday_pressure_score",
+
+    # Seasonality
+    "destination_peak_season_score",
+    "destination_monsoon_active",
+    "is_pilgrimage_season",
+    "major_event_at_destination",
+
+    # Fuel / Macro
+    "brent_crude_price_usd",
+    "atf_price_india_per_kl",
+    "usd_inr_rate",
+    "india_cpi_inflation_latest",
+
+    # Supply
+    "num_airlines_on_route",
+    "is_duopoly_route",
+    "route_seat_capacity_index",
+    "airline_sale_window_active",
+    "is_widebody_aircraft",
+
+    # Demand
+    "seats_remaining_estimate",
+    "search_volume_trend_7d",
+    "search_volume_trend_30d",
+    "irctc_railway_pressure_index",
+    "location_price_differential",
+
+    # Historical
+    "route_historical_mean_price",
+    "route_historical_min_price",
+    "price_percentile_last_90_days",
+
+    # Geopolitical / Disruption
+    "airspace_restriction_active",
+    "travel_advisory_for_destination",
+    "natural_disaster_at_destination",
+    "airline_labor_dispute_risk",
+    "major_fleet_grounding_active"
+]
+
+def impute_all_features(base_dict: dict) -> dict:
+    """Takes a dictionary with partial features and populates all 47 XGBoost feature columns."""
+    res = {}
+
+    # 1. Base/Cyclical
+    days_dep = base_dict.get("days_to_departure", 30)
+    res["days_to_departure"] = float(days_dep)
+    res["booking_window_percentile"] = float(base_dict.get("booking_window_percentile", (days_dep / 90.0 * 100.0)))
+
+    hour = float(base_dict.get("hour_of_departure", 12.0))
+    res["hour_of_departure"] = hour
+
+    # Compute cyclical fields if not present
+    res["day_of_week_search"] = float(base_dict.get("day_of_week_search", 2.0))
+    res["day_of_week_travel"] = float(base_dict.get("day_of_week_travel", 4.0))
+
+    dow_rad = 2 * math.pi * res["day_of_week_travel"] / 7.0
+    week_rad = 2 * math.pi * float(base_dict.get("week_of_year", 26.0)) / 52.0
+    month_rad = 2 * math.pi * float(base_dict.get("month_of_year", 6.0)) / 12.0
+    hour_rad = 2 * math.pi * hour / 24.0
+
+    res["week_of_year_sin"] = float(base_dict.get("week_of_year_sin", math.sin(week_rad)))
+    res["week_of_year_cos"] = float(base_dict.get("week_of_year_cos", math.cos(week_rad)))
+    res["month_of_year_sin"] = float(base_dict.get("month_of_year_sin", math.sin(month_rad)))
+    res["month_of_year_cos"] = float(base_dict.get("month_of_year_cos", math.cos(month_rad)))
+    res["hour_sin"] = float(base_dict.get("hour_sin", math.sin(hour_rad)))
+    res["hour_cos"] = float(base_dict.get("hour_cos", math.cos(hour_rad)))
+    res["is_weekend_travel"] = float(base_dict.get("is_weekend_travel", 1.0 if res["day_of_week_travel"] in [4, 5, 6] else 0.0))
+    res["is_tuesday_wednesday_search"] = float(base_dict.get("is_tuesday_wednesday_search", 1.0 if res["day_of_week_search"] in [1, 2] else 0.0))
+    res["days_since_last_price_drop"] = float(base_dict.get("days_since_last_price_drop", 3.0))
+
+    # 2. Festive / Calendar
+    days_to_nearest_festival = float(base_dict.get("days_to_nearest_public_holiday", 99.0))
+    res["days_to_nearest_public_holiday"] = days_to_nearest_festival
+    res["is_public_holiday"] = float(base_dict.get("is_public_holiday", 1.0 if days_to_nearest_festival == 0 else 0.0))
+    res["is_school_vacation_period"] = float(base_dict.get("is_school_vacation_period", 0.0))
+    res["is_exam_period"] = float(base_dict.get("is_exam_period", 0.0))
+    res["is_wedding_season"] = float(base_dict.get("is_wedding_season", 0.0))
+    res["is_long_weekend"] = float(base_dict.get("is_long_weekend", res["is_weekend_travel"]))
+    res["is_bridge_holiday"] = float(base_dict.get("is_bridge_holiday", 0.0))
+    res["holiday_pressure_score"] = float(base_dict.get("holiday_pressure_score", 1.0 / (abs(days_to_nearest_festival) + 1.0)))
+
+    # 3. Seasonality
+    res["destination_peak_season_score"] = float(base_dict.get("destination_peak_season_score", 0.5))
+    res["destination_monsoon_active"] = float(base_dict.get("destination_monsoon_active", 0.0))
+    res["is_pilgrimage_season"] = float(base_dict.get("is_pilgrimage_season", 0.0))
+    res["major_event_at_destination"] = float(base_dict.get("major_event_at_destination", 0.0))
+
+    # 4. Fuel / Macro
+    res["brent_crude_price_usd"] = float(base_dict.get("brent_crude_price_usd", 83.5))
+    res["atf_price_india_per_kl"] = float(base_dict.get("atf_price_india_per_kl", 98500.0))
+    res["usd_inr_rate"] = float(base_dict.get("usd_inr_rate", 83.4))
+    res["india_cpi_inflation_latest"] = float(base_dict.get("india_cpi_inflation_latest", 4.85))
+
+    # 5. Supply
+    res["num_airlines_on_route"] = float(base_dict.get("num_airlines_on_route", 5.0))
+    res["is_duopoly_route"] = float(base_dict.get("is_duopoly_route", 0.0))
+    res["route_seat_capacity_index"] = float(base_dict.get("route_seat_capacity_index", 1.05))
+    res["airline_sale_window_active"] = float(base_dict.get("airline_sale_window_active", 0.0))
+    res["is_widebody_aircraft"] = float(base_dict.get("is_widebody_aircraft", 0.0))
+
+    # 6. Demand
+    res["seats_remaining_estimate"] = float(base_dict.get("seats_remaining_estimate", 15.0))
+    res["search_volume_trend_7d"] = float(base_dict.get("search_volume_trend_7d", 1.0))
+    res["search_volume_trend_30d"] = float(base_dict.get("search_volume_trend_30d", 1.0))
+    res["irctc_railway_pressure_index"] = float(base_dict.get("irctc_railway_pressure_index", 0.2))
+    res["location_price_differential"] = float(base_dict.get("location_price_differential", 0.0))
+
+    # 7. Historical
+    res["route_historical_mean_price"] = float(base_dict.get("route_historical_mean_price", 5400.0))
+    res["route_historical_min_price"] = float(base_dict.get("route_historical_min_price", 3200.0))
+    res["price_percentile_last_90_days"] = float(base_dict.get("price_percentile_last_90_days", 50.0))
+
+    # 8. Geopolitical / Disruption
+    res["airspace_restriction_active"] = float(base_dict.get("airspace_restriction_active", 0.0))
+    res["travel_advisory_for_destination"] = float(base_dict.get("travel_advisory_for_destination", 0.0))
+    res["natural_disaster_at_destination"] = float(base_dict.get("natural_disaster_at_destination", 0.0))
+    res["airline_labor_dispute_risk"] = float(base_dict.get("airline_labor_dispute_risk", 0.0))
+    res["major_fleet_grounding_active"] = float(base_dict.get("major_fleet_grounding_active", 0.0))
+
+    return {k: float(v) for k, v in res.items()}
 
 
 class MLModelManager:
@@ -241,20 +390,13 @@ class MLModelManager:
         if model is None and XGBOOST_AVAILABLE:
             model = await self._train_global_xgboost()
 
-        # Build feature vector
-        num_cols = ["days_to_departure", "booking_window_percentile", "hour_of_departure", 
-                    "days_since_last_price_drop", "days_to_nearest_public_holiday", 
-                    "destination_peak_season_score", "brent_crude_price_usd", "usd_inr_rate"]
-        
-        # Build features dict for prediction
-        x_dict = {}
-        for c in num_cols:
-            x_dict[c] = float(features.get(c, 0.0))
+        # Build feature vector using all 47 features
+        x_dict = impute_all_features(features)
 
         if model and XGBOOST_AVAILABLE:
             try:
                 import pandas as pd
-                x_df = pd.DataFrame([x_dict])[num_cols]
+                x_df = pd.DataFrame([x_dict])[XGBOOST_FEATURE_COLS]
                 pred_price = float(model.predict(x_df)[0])
 
                 # Extract SHAP values
@@ -381,7 +523,7 @@ class MLModelManager:
                         # Build minimal feature vector for training
                         dt = datetime.fromisoformat(r[2])
                         days_dep = 30 # default mock during log compiling
-                        data.append({
+                        base_dict = {
                             "days_to_departure": days_dep,
                             "booking_window_percentile": 33.3,
                             "hour_of_departure": dt.hour,
@@ -389,9 +531,11 @@ class MLModelManager:
                             "days_to_nearest_public_holiday": 12,
                             "destination_peak_season_score": 0.6,
                             "brent_crude_price_usd": 83.5,
-                            "usd_inr_rate": 83.4,
-                            "price_target": r[1]
-                        })
+                            "usd_inr_rate": 83.4
+                        }
+                        full_feats = impute_all_features(base_dict)
+                        full_feats["price_target"] = r[1]
+                        data.append(full_feats)
 
             # If empty, bootstrap with synthetic records (500 data points) so model is pre-built
             if len(data) < 50:
@@ -404,7 +548,7 @@ class MLModelManager:
                     # public holiday surge
                     is_holiday = int(np.random.rand() < 0.15)
                     price += is_holiday * 1200.0
-                    data.append({
+                    base_dict = {
                         "days_to_departure": days_dep,
                         "booking_window_percentile": float(days_dep / 90.0 * 100),
                         "hour_of_departure": np.random.randint(0, 24),
@@ -412,13 +556,15 @@ class MLModelManager:
                         "days_to_nearest_public_holiday": np.random.randint(-15, 45) if is_holiday else 99,
                         "destination_peak_season_score": float(np.random.uniform(0.1, 1.0)),
                         "brent_crude_price_usd": float(83.5 + np.random.normal(0, 2.0)),
-                        "usd_inr_rate": float(83.4 + np.random.normal(0, 0.5)),
-                        "price_target": price
-                    })
+                        "usd_inr_rate": float(83.4 + np.random.normal(0, 0.5))
+                    }
+                    full_feats = impute_all_features(base_dict)
+                    full_feats["price_target"] = price
+                    data.append(full_feats)
 
             df = pd.DataFrame(data)
             y = df["price_target"]
-            X = df.drop(columns=["price_target"])
+            X = df[XGBOOST_FEATURE_COLS]
 
             # Optuna or Grid Search hyperparameter optimization
             best_params = {"n_estimators": 100, "max_depth": 5, "learning_rate": 0.08}
@@ -464,8 +610,20 @@ class MLModelManager:
                 except Exception as grid_err:
                     logger.warning(f"Grid search failed: {grid_err}. Using default fallback parameters.")
 
-            # Fit final XGBoost Regressor with optimized parameters
-            model = xgb.XGBRegressor(**best_params, random_state=42)
+            # Fit final XGBoost Regressor with optimized parameters and GPU check
+            xgb_params = {**best_params, "random_state": 42}
+            try:
+                test_model = xgb.XGBRegressor(tree_method="hist", device="cuda", n_estimators=1)
+                test_model.fit(np.array([[1.0]]), np.array([1.0]))
+                xgb_params["tree_method"] = "hist"
+                xgb_params["device"] = "cuda"
+                logger.info("Global XGBoost training: GPU acceleration enabled.")
+            except Exception:
+                xgb_params["tree_method"] = "hist"
+                xgb_params["device"] = "cpu"
+                logger.info("Global XGBoost training: GPU not available. Using CPU.")
+
+            model = xgb.XGBRegressor(**xgb_params)
             model.fit(X, y)
 
             model_path = os.path.join(self.models_dir, "xgboost_global.pkl")

@@ -1,52 +1,22 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  Plane, Wallet, Sparkles, Activity, Check, Terminal, Eye, Tag, Plus
+  Plane, Wallet, Sparkles, Activity, Check, Terminal, Eye, Tag, Plus, Upload, FileImage, Loader
 } from "lucide-react";
 import { useSearchStore, useBotStore, useSettingsStore, usePlatformStore, useResultStore } from "../store";
+import { validDate, localDate } from '../dateUtils';
+import airportReference from '../../../backend/data/indian_airports.json';
 
 
 interface SearchCockpitProps {
-  sendMessage: (type: string, payload: any) => void;
+  sendMessage: (type: string, payload: Record<string, unknown>) => void;
 }
 
 
 
 const BANKS = ["SBI", "HDFC", "ICICI", "AXIS", "KOTAK", "AMEX"];
 
-const INDIAN_AIRPORTS = [
-  { code: "DEL", city: "Delhi / New Delhi", name: "Indira Gandhi International Airport" },
-  { code: "BOM", city: "Mumbai", name: "Chhatrapati Shivaji Maharaj International Airport" },
-  { code: "BLR", city: "Bengaluru", name: "Kempegowda International Airport" },
-  { code: "CCU", city: "Kolkata", name: "Netaji Subhash Chandra Bose International Airport" },
-  { code: "MAA", city: "Chennai", name: "Chennai International Airport" },
-  { code: "HYD", city: "Hyderabad", name: "Rajiv Gandhi International Airport" },
-  { code: "GOI", city: "Goa (Dabolim)", name: "Dabolim Airport" },
-  { code: "GOX", city: "Goa (Mopa)", name: "Manohar International Airport" },
-  { code: "COK", city: "Kochi / Cochin", name: "Cochin International Airport" },
-  { code: "AMD", city: "Ahmedabad", name: "Sardar Vallabhbhai Patel International Airport" },
-  { code: "PNQ", city: "Pune", name: "Pune Airport" },
-  { code: "ATQ", city: "Amritsar", name: "Sri Guru Ram Dass Jee International Airport" },
-  { code: "IXC", city: "Chandigarh", name: "Shaheed Bhagat Singh International Airport" },
-  { code: "LKO", city: "Lucknow", name: "Chaudhary Charan Singh International Airport" },
-  { code: "PAT", city: "Patna", name: "Jayprakash Narayan Airport" },
-  { code: "JAI", city: "Jaipur", name: "Jaipur International Airport" },
-  { code: "TRV", city: "Trivandrum", name: "Trivandrum International Airport" },
-  { code: "GAU", city: "Guwahati", name: "Lokpriya Gopinath Bordoloi International Airport" },
-  { code: "VTZ", city: "Visakhapatnam", name: "Visakhapatnam International Airport" },
-  { code: "BBI", city: "Bhubaneswar", name: "Biju Patnaik International Airport" },
-  { code: "IXB", city: "Bagdogra", name: "Bagdogra Airport" },
-  { code: "JDH", city: "Jodhpur", name: "Jodhpur Airport" },
-  { code: "UDR", city: "Udaipur", name: "Maharana Pratap Airport" },
-  { code: "NAG", city: "Nagpur", name: "Dr. Babasaheb Ambedkar International Airport" },
-  { code: "IXR", city: "Ranchi", name: "Birsa Munda Airport" },
-  { code: "RPR", city: "Raipur", name: "Swami Vivekananda Airport" },
-  { code: "IXZ", city: "Port Blair", name: "Veer Savarkar International Airport" },
-  { code: "BDQ", city: "Vadodara", name: "Vadodara Airport" },
-  { code: "SXR", city: "Srinagar", name: "Sheikh ul-Alam International Airport" },
-  { code: "IXJ", city: "Jammu", name: "Jammu Airport" },
-  { code: "IMF", city: "Imphal", name: "Imphal Airport" },
-  { code: "HND", city: "Hindon (Ghaziabad)", name: "Hindon Airport" }
-];
+// Share the compiler's sourced location reference; this is not a promise of service.
+const INDIAN_AIRPORTS = airportReference.airports;
 
 const DEFAULT_PLATFORMS = [
   { id: "makemytrip", name: "MakeMyTrip", desc: "makemytrip.com" },
@@ -63,10 +33,8 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
   const platformsLoaded = usePlatformStore((s) => s.loaded);
   
   const allPlatforms = [
-    { id: "mock", name: "MockBooking.com", desc: "Local Mock Engine" },
     ...(platformsLoaded
       ? dbPlatforms
-          .filter((p) => p.id !== "mock")
           .map((p) => ({
             id: p.id,
             name: p.name,
@@ -102,13 +70,100 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
 
   const [nlpQuery, setNlpQuery] = useState("");
   const [nlpExtracting, setNlpExtracting] = useState(false);
+  const nlpPending = useRef(false);
+  const [aiTab, setAiTab] = useState<"text" | "vision">("text");
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [visionExtracting, setVisionExtracting] = useState(false);
+  const visionPending = useRef(false);
+  const visionReader = useRef<FileReader | null>(null);
+  const [visionError, setVisionError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileUpload = (file: File) => {
+    if (!file || nlpPending.current || visionPending.current) return;
+    if (!file.type.startsWith("image/")) {
+      setVisionError("Invalid file type. Please upload an image screenshot.");
+      return;
+    }
+    setVisionError("");
+    visionPending.current = true;
+    setVisionExtracting(true);
+
+    const reader = new FileReader();
+    visionReader.current = reader;
+    reader.onload = (e) => {
+      if (!visionPending.current || visionReader.current !== reader) return;
+      const base64Data = e.target?.result as string;
+      if (base64Data) {
+        sendMessage("ai:extract", { imageBase64: base64Data });
+      } else {
+        setVisionError("Failed to read image file.");
+        visionPending.current = false;
+        setVisionExtracting(false);
+      }
+    };
+    reader.onerror = () => {
+      if (visionReader.current !== reader) return;
+      setVisionError("Error reading file.");
+      visionPending.current = false;
+      setVisionExtracting(false);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFileUpload(e.dataTransfer.files[0]);
+    }
+  };
+
+  const triggerFileSelect = () => {
+    if (nlpPending.current || visionPending.current) return;
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      handleFileUpload(e.target.files[0]);
+    }
+  };
 
   // Custom Promo / Coupon Input States
   const [customCode, setCustomCode] = useState("");
   const [customPlatform, setCustomPlatform] = useState("");
   const [customBank, setCustomBank] = useState("ANY");
-  const [customValue, setCustomValue] = useState("500");
+  const [customValue, setCustomValue] = useState("");
   const [couponStatus, setCouponStatus] = useState("");
+  const [couponSaving, setCouponSaving] = useState(false);
+  const couponPending = useRef(false);
+  useEffect(()=>{
+    const added=(event:Event)=>{
+      const payload=(event as CustomEvent).detail;
+      if (!couponPending.current || payload.platform!==customPlatform || payload.code!==customCode.trim().toUpperCase()) return;
+      couponPending.current=false;setCouponSaving(false); setCouponStatus('Coupon saved. Its actual eligibility and savings still need testing.');
+      setCustomCode(''); setCustomValue(''); setCustomBank('ANY');
+    };
+    const failed=(event:Event)=>{
+      const payload=(event as CustomEvent).detail;
+      if (payload?.originalType==='coupon:add' && couponPending.current) {couponPending.current=false;setCouponSaving(false);setCouponStatus('Error: '+payload.message);}
+      if (payload?.originalType==='search:nlp_parse') {nlpPending.current=false;setNlpExtracting(false);}
+      if (payload?.originalType==='ai:extract') {visionPending.current=false;visionReader.current=null;setVisionExtracting(false);setVisionError(payload.message || 'Image extraction failed.');}
+    };
+    const disconnected=()=>{nlpPending.current=false;visionPending.current=false;visionReader.current=null;setNlpExtracting(false);setVisionExtracting(false);if(couponPending.current){couponPending.current=false;setCouponSaving(false);setCouponStatus('Error: Connection lost. Check the coupon list before retrying.');}};
+    window.addEventListener('coupon_added',added);window.addEventListener('request_error',failed);window.addEventListener('socket_disconnected',disconnected);
+    return()=>{window.removeEventListener('coupon_added',added);window.removeEventListener('request_error',failed);window.removeEventListener('socket_disconnected',disconnected);};
+  },[customPlatform,customCode]);
 
   const handleAddCustomCoupon = () => {
     setCouponStatus("");
@@ -121,26 +176,23 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
       return;
     }
     
+    couponPending.current=true;setCouponSaving(true);
+    setCouponStatus('Saving coupon...');
     sendMessage("coupon:add", {
       platform: customPlatform,
       code: customCode.trim().toUpperCase(),
       description: `User-defined code for ${customPlatform}`,
       bank_restriction: customBank === "ANY" ? null : customBank,
-      discount_value: parseFloat(customValue) || 500.0,
+      discount_value: Math.max(0, parseFloat(customValue) || 0),
       discount_type: "FLAT",
       card_type: "ANY"
     });
     
-    setCouponStatus("Success: Coupon saved to test registry!");
-    setCustomCode("");
-    setCustomValue("500");
-    setCustomBank("ANY");
-    setTimeout(() => setCouponStatus(""), 3000);
   };
 
   // Autocomplete & Validation States
-  const [originInput, setOriginInput] = useState("");
-  const [destInput, setDestInput] = useState("");
+  const [originInput, setOriginInput] = useState(trip.origin?.code || "");
+  const [destInput, setDestInput] = useState(trip.destination?.code || "");
   const [showOriginDropdown, setShowOriginDropdown] = useState(false);
   const [showDestDropdown, setShowDestDropdown] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
@@ -158,43 +210,44 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
         setShowDestDropdown(false);
       }
     }
+    const syncTripInputs = () => {
+      const current = useSearchStore.getState().trip;
+      setOriginInput(current.origin?.code || "");
+      setDestInput(current.destination?.code || "");
+    };
     const handleNlpDone = () => {
+      nlpPending.current = false;
+      syncTripInputs();
       setNlpExtracting(false);
       setNlpQuery("");
     };
+    const handleVisionDone = () => {
+      visionPending.current = false;
+      visionReader.current = null;
+      syncTripInputs();
+      setVisionExtracting(false);
+      setVisionError("");
+    };
     document.addEventListener("mousedown", handleClickOutside);
     window.addEventListener("nlp_parsed", handleNlpDone);
+    window.addEventListener("vision_parsed", handleVisionDone);
     return () => {
+      nlpPending.current = false;
+      visionPending.current = false;
+      visionReader.current = null;
       document.removeEventListener("mousedown", handleClickOutside);
       window.removeEventListener("nlp_parsed", handleNlpDone);
+      window.removeEventListener("vision_parsed", handleVisionDone);
     };
   }, []);
 
-  // Sync inputs with trip changes (e.g. from AI parsing)
-  useEffect(() => {
-    if (trip.origin) {
-      const matched = INDIAN_AIRPORTS.find((a) => a.code === trip.origin?.code);
-      setOriginInput(matched ? `${matched.city} (${matched.code})` : trip.origin.code);
-    } else {
-      setOriginInput("");
-    }
-  }, [trip.origin]);
-
-  useEffect(() => {
-    if (trip.destination) {
-      const matched = INDIAN_AIRPORTS.find((a) => a.code === trip.destination?.code);
-      setDestInput(matched ? `${matched.city} (${matched.code})` : trip.destination.code);
-    } else {
-      setDestInput("");
-    }
-  }, [trip.destination]);
-
   const clearResults = () => {
-    import("../store").then((m) => m.useResultStore.getState().clearResults());
+    useResultStore.getState().clearResults();
   };
 
   const handleNlpSearch = () => {
-    if (!nlpQuery.trim()) return;
+    if (!nlpQuery.trim() || nlpPending.current || visionPending.current) return;
+    nlpPending.current = true;
     setNlpExtracting(true);
     sendMessage("search:nlp_parse", { text: nlpQuery });
   };
@@ -231,8 +284,8 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
     if (!trip.departureDate) {
       newErrors.departureDate = "Departure date is required";
     } else {
-      const parsedDate = new Date(trip.departureDate);
-      if (isNaN(parsedDate.getTime())) {
+      const parsedDate = new Date(trip.departureDate+'T00:00:00');
+      if (!validDate(trip.departureDate)) {
         newErrors.departureDate = "Please select a valid date";
       } else {
         const today = new Date();
@@ -249,8 +302,12 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
     }
 
     // 5. Passengers validation
-    if (!trip.passengerCount || trip.passengerCount < 1 || trip.passengerCount > 9) {
+    if (!Number.isInteger(trip.passengerCount) || trip.passengerCount < 1 || trip.passengerCount > 9) {
       newErrors.passengerCount = "Must be between 1 and 9";
+    }
+
+    if (trip.tripType==='round_trip' && (!trip.returnDate || !validDate(trip.returnDate) || trip.returnDate < trip.departureDate)) {
+      newErrors.returnDate='Choose a valid return date on or after departure.';
     }
 
     // 6. Platforms validation
@@ -268,6 +325,7 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
     }
     clearBotData();
     clearResults();
+    useSearchStore.getState().setSearchId(null);
     setSearchStatus("running");
     sendMessage("search:start", { trip, financial, cloak, platforms });
   };
@@ -342,34 +400,83 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
       <div className="page-header">
         <h1 className="page-title">Flight Search & Analytics</h1>
         <p className="page-subtitle">
-          Configure routing parameters, payment constraints, and dispatch parallel stealth workers.
+          Compare domestic Indian flights, then verify eligible coupons and fees at checkout.
         </p>
       </div>
 
-      {/* AI NLP Input */}
+      {/* AI Smart Assistant (Conversational & Vision Upload) */}
       <div className="glass-card module-card" style={{ marginBottom: 20 }}>
-        <div className="flex-row gap-sm" style={{ marginBottom: 10 }}>
-          <Sparkles size={14} className="module-icon" />
-          <span style={{ fontSize: 11, fontWeight: 600, color: "hsl(var(--color-primary))", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-            AI Conversational Input
-          </span>
-        </div>
-        <div className="flex-row gap-md">
-          <div style={{ flex: 1, position: "relative" }}>
-            <input
-              type="text"
-              className={`form-input ${nlpExtracting ? "analyzing" : ""}`}
-              placeholder='e.g. "Delhi to Goa next Friday, evening flight, non-stop, economy for 2"'
-              value={nlpQuery}
-              onChange={(e) => setNlpQuery(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleNlpSearch()}
-              style={{ paddingLeft: 14 }}
-            />
-          </div>
-          <button className="btn btn-secondary" onClick={handleNlpSearch} disabled={nlpExtracting}>
-            {nlpExtracting ? "Extracting..." : "Analyze"}
+        <div className="ai-tabs-container">
+          <button
+            className={`ai-tab-btn ${aiTab === "text" ? "active" : ""}`}
+            onClick={() => setAiTab("text")}
+          >
+            <Sparkles size={13} style={{ marginRight: 6 }} />
+            Conversational Search
+          </button>
+          <button
+            className={`ai-tab-btn ${aiTab === "vision" ? "active" : ""}`}
+            onClick={() => setAiTab("vision")}
+          >
+            <FileImage size={13} style={{ marginRight: 6 }} />
+            Itinerary Vision Scan
           </button>
         </div>
+
+        {aiTab === "text" ? (
+          <div className="flex-row gap-md">
+            <div style={{ flex: 1, position: "relative" }}>
+              <input
+                type="text"
+                className={`form-input ${nlpExtracting ? "analyzing" : ""}`}
+                placeholder='e.g. "Delhi to Goa next Friday, evening flight, non-stop, economy for 2"'
+                value={nlpQuery}
+                onChange={(e) => setNlpQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleNlpSearch()}
+                style={{ paddingLeft: 14 }}
+              />
+            </div>
+            <button className="btn btn-secondary" onClick={handleNlpSearch} disabled={nlpExtracting || visionExtracting}>
+              {nlpExtracting ? "Extracting..." : "Analyze"}
+            </button>
+          </div>
+        ) : (
+          <div className="flex-col gap-sm">
+            <div
+              className={`upload-zone ${isDragOver ? "dragover" : ""} ${visionExtracting ? "analyzing" : ""}`}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              onClick={triggerFileSelect}
+            >
+              <input
+                type="file"
+                ref={fileInputRef}
+                style={{ display: "none" }}
+                accept="image/*"
+                onChange={handleFileChange}
+              />
+              {visionExtracting ? (
+                <>
+                  <Loader size={24} className="upload-icon animate-pulse" style={{ color: "hsl(var(--color-warning))" }} />
+                  <span className="upload-title">Scanning itinerary screenshot...</span>
+                  <span className="upload-subtitle">Gemini Vision is extracting structured travel parameters.</span>
+                </>
+              ) : (
+                <>
+                  <Upload size={24} className="upload-icon" />
+                  <span className="upload-title">Drag & drop flight itinerary screenshot here</span>
+                  <span className="upload-subtitle">Or click to select an image from your files</span>
+                </>
+              )}
+            </div>
+            {visionError && (
+              <div className="validation-error" style={{ textAlign: "center" }}>
+                {visionError}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="grid-2-1">
@@ -468,7 +575,7 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
                 )}
               </div>
               <div>
-                <label className="form-label">Passengers</label>
+                <label className="form-label">Adults (child fares are not supported yet)</label>
                 <input
                   type="number"
                   className={`form-input ${validationErrors.passengerCount ? "invalid" : ""}`}
@@ -476,7 +583,7 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
                   max="9"
                   value={trip.passengerCount}
                   onChange={(e) => {
-                    const val = parseInt(e.target.value) || 1;
+                    const val = Number(e.target.value);
                     updateTrip({ passengerCount: val });
                     setValidationErrors((prev) => {
                       const next = { ...prev };
@@ -494,12 +601,27 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
 
           {/* Platform Selection */}
           <div className="glass-card module-card">
+            <div className="grid-2" style={{marginBottom:16}}>
+              <label className="form-label">Trip type<select className="form-input" value={trip.tripType} onChange={e=>updateTrip({tripType:e.target.value as 'one_way' | 'round_trip'})}>
+                <option value="one_way">One way</option><option value="round_trip">Round trip (separate legs)</option></select></label>
+              <label className="form-label">Cabin<select className="form-input" value={trip.cabinClass} onChange={e=>updateTrip({cabinClass:e.target.value})}>
+                <option value="ECONOMY">Economy</option><option value="PREMIUM_ECONOMY">Premium economy</option><option value="BUSINESS">Business</option><option value="FIRST">First class</option></select></label>
+            </div>
+            {trip.tripType==='round_trip' && <label className="form-label">Return date<input type="date" className="form-input" value={trip.returnDate || ''} min={trip.departureDate || localDate()} onChange={e=>updateTrip({returnDate:e.target.value})}/>{validationErrors.returnDate && <span role="alert" className="validation-error">{validationErrors.returnDate}</span>}</label>}
+            <label className="form-label">Preferred departure time<select className="form-input" value={trip.preferredTime} onChange={e=>updateTrip({preferredTime:e.target.value})}>
+              {['ANY','MORNING','AFTERNOON','EVENING','NIGHT'].map(t=><option key={t}>{t}</option>)}</select></label>
+            <label className="form-label">Nearby departure dates (Google Flights)</label>
+            <select className="form-input" value={trip.nearbyDatesRange || 0} onChange={e=>updateTrip({nearbyDatesRange:Number(e.target.value)})}>
+              <option value={0}>Exact date only</option><option value={1}>Compare ±1 day</option><option value={2}>Compare ±2 days</option><option value={3}>Compare ±3 days</option>
+            </select>
+          </div>
+          <div className="glass-card module-card">
             <div className="module-header">
               <Activity size={15} className="module-icon" />
               <span className="module-title">Target Platforms</span>
             </div>
             <div className="grid-2">
-              {allPlatforms.filter((p) => p.id !== "mock").map((p) => {
+              {allPlatforms.filter((p) => ['makemytrip','easemytrip','cleartrip','google_flights'].includes(p.id)).map((p) => {
                 const active = platforms.includes(p.id);
                 return (
                   <div
@@ -515,10 +637,10 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
                     }}
                   >
                     <div>
-                      <div style={{ fontWeight: 600, color: active ? "#ffffff" : "inherit" }}>{p.name}</div>
-                      <div style={{ fontSize: 10, color: active ? "rgba(255, 255, 255, 0.7)" : "hsl(var(--text-muted))", marginTop: 2 }}>{p.desc}</div>
+                      <div style={{ fontWeight: 600, color: active ? "rgba(0, 0, 0, 0.9)" : "inherit" }}>{p.name}</div>
+                      <div style={{ fontSize: 10, color: active ? "rgba(0, 0, 0, 0.6)" : "hsl(var(--text-muted))", marginTop: 2 }}>{p.desc}</div>
                     </div>
-                    {active && <Check size={14} color="white" />}
+                    {active && <Check size={14} color="black" />}
                   </div>
                 );
               })}
@@ -543,6 +665,7 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
                     placeholder="e.g. FLYNEW, HDFC10"
                     className="form-input"
                     value={customCode}
+                    disabled={couponSaving}
                     onChange={(e) => setCustomCode(e.target.value.toUpperCase())}
                   />
                 </div>
@@ -551,10 +674,11 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
                   <select
                     className="form-input"
                     value={customPlatform}
+                    disabled={couponSaving}
                     onChange={(e) => setCustomPlatform(e.target.value)}
                   >
                     <option value="">Select Website...</option>
-                    {allPlatforms.filter((p) => p.id !== "mock").map((p) => (
+                    {allPlatforms.filter((p) => ['makemytrip','easemytrip','cleartrip'].includes(p.id)).map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.name}
                       </option>
@@ -569,6 +693,7 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
                   <select
                     className="form-input"
                     value={customBank}
+                    disabled={couponSaving}
                     onChange={(e) => setCustomBank(e.target.value)}
                   >
                     <option value="ANY">None (Universal)</option>
@@ -580,12 +705,13 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
                   </select>
                 </div>
                 <div>
-                  <label className="form-label" style={{ fontSize: 11 }}>Est. Discount Value (₹)</label>
+                  <label className="form-label" style={{ fontSize: 11 }}>Advertised discount, optional (₹)</label>
                   <input
                     type="number"
                     placeholder="e.g. 500"
                     className="form-input"
                     value={customValue}
+                    disabled={couponSaving}
                     onChange={(e) => setCustomValue(e.target.value)}
                   />
                 </div>
@@ -600,59 +726,16 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
               <button
                 className="btn btn-secondary flex-row gap-xs"
                 onClick={handleAddCustomCoupon}
+                disabled={couponSaving}
                 style={{ width: "100%", justifyContent: "center", marginTop: 6 }}
               >
                 <Plus size={14} />
-                <span>Save Promo Code</span>
+                <span>{couponSaving?'Saving...':'Save Promo Code'}</span>
               </button>
             </div>
           </div>
 
-          {/* Stealth Engine
-          <div className="glass-card module-card">
-            <div className="module-header">
-              <Shield size={15} className="module-icon" />
-              <span className="module-title">Stealth Engine</span>
-            </div>
-            <div className="grid-2" style={{ marginBottom: 12 }}>
-              <div>
-                <label className="form-label">Residential Proxies</label>
-                <select
-                  className="form-input"
-                  value={cloak.proxyMode}
-                  onChange={(e) => updateCloak({ proxyMode: e.target.value as "OFF" | "ON" })}
-                >
-                  <option value="OFF">Disabled (Direct IP)</option>
-                  <option value="ON">Enabled (Rotate India IPs)</option>
-                </select>
-              </div>
-              <div>
-                <label className="form-label">Browser Engine</label>
-                <select
-                  className="form-input"
-                  value={cloak.engine}
-                  onChange={(e) => updateCloak({ engine: e.target.value as "playwright" | "camoufox" })}
-                >
-                  <option value="playwright">Playwright Chromium</option>
-                  <option value="camoufox">Camoufox Firefox</option>
-                </select>
-              </div>
-            </div>
-            <div>
-              <label className="form-label">
-                Parallel Workers: {cloak.maxConcurrentBots}
-              </label>
-              <input
-                type="range"
-                min="1"
-                max="6"
-                value={cloak.maxConcurrentBots}
-                onChange={(e) => updateCloak({ maxConcurrentBots: parseInt(e.target.value) })}
-                style={{ width: "100%" }}
-              />
-            </div>
-          </div>
-          */}
+
 
           {/* Launch Button */}
           {isRunning ? (
@@ -661,13 +744,16 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
             </button>
           ) : (
             <button className="btn btn-primary btn-launch" onClick={handleLaunch}>
-              🚀 Launch Analytics Agent
+              Search flight prices
             </button>
           )}
         </div>
 
         {/* RIGHT COLUMN */}
         <div className="flex-col gap-lg">
+          <div className="glass-card module-card"><label>Stops<select aria-label="Maximum stops" className="form-input" value={trip.maxStops ?? 'ANY'} onChange={e=>updateTrip({maxStops:e.target.value==='ANY'?null:Number(e.target.value)})}>
+            <option value="ANY">Any number of stops</option><option value="0">Nonstop only</option><option value="1">At most one stop</option><option value="2">At most two stops</option>
+          </select></label></div>
           {/* Financial Constraints */}
           <div className="glass-card module-card">
             <div className="module-header">
@@ -695,41 +781,8 @@ export default function SearchCockpit({ sendMessage }: SearchCockpitProps) {
                   Allow BNPL (Pay Later)
                 </label>
               </div>
-              <div>
-                <span className="form-label">Preferred Banks</span>
-                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
-                  {BANKS.map((bank) => {
-                    const active = financial.whitelistedBanks.includes(bank);
-                    return (
-                      <button
-                        key={bank}
-                        className={`bank-chip ${active ? "active" : ""}`}
-                        onClick={() =>
-                          updateFinancial({
-                            whitelistedBanks: active
-                              ? financial.whitelistedBanks.filter((b) => b !== bank)
-                              : [...financial.whitelistedBanks, bank],
-                          })
-                        }
-                      >
-                        {bank}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
             </div>
-
-            <div>
-              <label className="form-label">Custom Rules (Natural Language)</label>
-              <textarea
-                className="form-input"
-                rows={2}
-                placeholder="e.g., I hold HDFC Regalia and SBI Simply Save. Ignore Yes Bank."
-                value={financial.customInstructions}
-                onChange={(e) => updateFinancial({ customInstructions: e.target.value })}
-              />
-            </div>
+            <p>Card ownership is not required before searching. Results show deal conditions; tell us there if you cannot use a card or payment method.</p>
           </div>
 
           {/* Live Monitor */}

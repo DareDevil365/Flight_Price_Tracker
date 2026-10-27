@@ -6,6 +6,7 @@ watchlist, external savings, predictions, and notifications.
 
 import asyncio
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -13,7 +14,7 @@ from typing import Optional
 import aiosqlite
 from loguru import logger
 
-DB_PATH = Path(__file__).parent / "db" / "flight_agent.db"
+DB_PATH = Path(os.environ.get('FLIGHT_FINDER_DB', str(Path(__file__).parent / 'db' / 'flight_agent.db')))
 SCHEMA_PATH = Path(__file__).parent / "db" / "schema.sql"
 
 
@@ -32,6 +33,36 @@ class CouponDB:
         schema_sql = SCHEMA_PATH.read_text(encoding="utf-8")
         async with self.lock:
             await self.db.executescript(schema_sql)
+            await self.db.commit()
+
+            async with self.db.execute('PRAGMA table_info(fare_quotes)') as cur:
+                quote_columns=[r['name'] for r in await cur.fetchall()]
+            if 'quality_status' not in quote_columns:
+                await self.db.execute("ALTER TABLE fare_quotes ADD COLUMN quality_status TEXT NOT NULL DEFAULT 'legacy_unchecked'")
+                await self.db.commit()
+            if 'departure_time' not in quote_columns:
+                await self.db.execute('ALTER TABLE fare_quotes ADD COLUMN departure_time TEXT')
+                await self.db.commit()
+            if 'stops' not in quote_columns:
+                await self.db.execute('ALTER TABLE fare_quotes ADD COLUMN stops INTEGER')
+                await self.db.commit()
+            if 'evidence' not in quote_columns:
+                await self.db.execute('ALTER TABLE fare_quotes ADD COLUMN evidence TEXT')
+            if 'evidence_version' not in quote_columns:
+                await self.db.execute('ALTER TABLE fare_quotes ADD COLUMN evidence_version INTEGER NOT NULL DEFAULT 0')
+            for table, additions in {
+                'red_room':{'last_error':'TEXT','last_attempt':'TEXT','last_success':'TEXT','lease_owner':'TEXT','lease_until':'TEXT','failure_count':'INTEGER NOT NULL DEFAULT 0'},
+                'notifications':{'dedup_key':'TEXT'}
+            }.items():
+                async with self.db.execute('PRAGMA table_info('+table+')') as cur:
+                    columns={r['name'] for r in await cur.fetchall()}
+                for name,kind in additions.items():
+                    if name not in columns:
+                        await self.db.execute('ALTER TABLE '+table+' ADD COLUMN '+name+' '+kind)
+            await self.db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_dedup ON notifications(dedup_key) WHERE dedup_key IS NOT NULL')
+            await self.db.execute('''CREATE TABLE IF NOT EXISTS provider_runs (
+                id INTEGER PRIMARY KEY,search_id TEXT,platform TEXT,trip TEXT,status TEXT,reason_code TEXT,
+                message TEXT,observed_at TEXT NOT NULL)''')
             await self.db.commit()
 
             # Migration check for departure_date in search_results
@@ -107,7 +138,7 @@ class CouponDB:
             WHERE platform = ?
         """
         if active_only:
-            query += " AND is_active = 1"
+            query += " AND is_active = 1 AND (valid_from IS NULL OR valid_from <= date('now')) AND (valid_until IS NULL OR valid_until >= date('now'))"
         query += " ORDER BY (trust_score * COALESCE(discount_value, 0)) DESC"
 
         async with self.db.execute(query, (platform,)) as cursor:
@@ -128,8 +159,23 @@ class CouponDB:
                         source_type, trust_score
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(platform, code) DO UPDATE SET
-                        description = COALESCE(excluded.description, description),
-                        valid_until = COALESCE(excluded.valid_until, valid_until),
+                        description = excluded.description,
+                        bank_restriction = excluded.bank_restriction,
+                        card_type = excluded.card_type,
+                        requires_emi = excluded.requires_emi,
+                        requires_bnpl = excluded.requires_bnpl,
+                        requires_wallet = excluded.requires_wallet,
+                        app_only = excluded.app_only,
+                        discount_type = excluded.discount_type,
+                        discount_value = excluded.discount_value,
+                        max_discount = excluded.max_discount,
+                        min_booking_value = excluded.min_booking_value,
+                        valid_from = excluded.valid_from,
+                        valid_until = excluded.valid_until,
+                        source = excluded.source,
+                        source_url = excluded.source_url,
+                        source_type = excluded.source_type,
+                        trust_score = excluded.trust_score,
                         is_active = excluded.is_active,
                         updated_at = CURRENT_TIMESTAMP
                     """,
@@ -157,10 +203,52 @@ class CouponDB:
                     ),
                 )
                 await self.db.commit()
-            return self.db.total_changes
+                if coupon.get('source_url') and coupon.get('evidence_kind') in ('public_browser','public_http'):
+                    await self.db.execute('INSERT INTO live_offer_evidence VALUES (?,?,?,?) ON CONFLICT(platform,code) DO UPDATE SET payload=excluded.payload,observed_at=excluded.observed_at',
+                        (coupon.get('platform'),coupon.get('code'),json.dumps(coupon),datetime.now(timezone.utc).isoformat()))
+                    await self.db.execute('INSERT OR IGNORE INTO offer_observations (platform,code,description,valid_from,valid_until,source_url,observed_day) VALUES (?,?,?,?,?,?,?)',
+                        (coupon.get('platform'),coupon.get('code'),coupon.get('description'),coupon.get('valid_from'),coupon.get('valid_until'),coupon.get('source_url'),datetime.now(timezone.utc).date().isoformat()))
+                    await self.db.commit()
+            return 1
         except Exception as e:
             logger.error(f"Error adding coupon: {e}")
             return 0
+
+    async def get_live_coupons(self,platform,include_future=False):
+        """Newly observed public offers and explicitly user-entered candidates only.
+
+        Legacy seed coupons remain in the old table for research. They never appear
+        as current published offers or supply bank-anniversary predictions.
+        """
+        from quotes import india_today
+        booking_day=india_today().isoformat()
+        expiry_clause=" AND (c.valid_from IS NULL OR c.valid_from<=?)" if not include_future else ''
+        async with self.db.execute("""SELECT c.*, e.payload AS published_payload FROM coupons c
+            LEFT JOIN live_offer_evidence e ON e.platform=c.platform AND e.code=c.code
+            WHERE c.platform=? AND c.is_active=1
+            AND (c.valid_until IS NULL OR c.valid_until>=?)
+            AND (c.source='user' OR EXISTS (SELECT 1 FROM live_offer_evidence e
+                WHERE e.platform=c.platform AND e.code=c.code AND e.observed_at>=?))"""+expiry_clause+
+            ' ORDER BY c.trust_score DESC,c.discount_value DESC',
+            (platform,booking_day,(datetime.now(timezone.utc)-timedelta(days=7)).isoformat(),
+             *([] if include_future else [booking_day]))) as cur:
+            rows=[dict(r) for r in await cur.fetchall()]
+        # Reinterpret saved public terms with the current eligibility parser;
+        # this does not turn an old observation into a newly observed offer.
+        from offer_parser import published_offer
+        for row in rows:
+            payload=row.pop('published_payload',None)
+            if row.get('source')!='user' and row.get('source_url'):
+                try:
+                    saved=json.loads(payload or '{}')
+                    row['eligibility_unconfirmed']=not isinstance(saved,dict) or saved.get('eligibility_unconfirmed') is True or len(row.get('description') or '')>=2000
+                except (ValueError,TypeError):
+                    row['eligibility_unconfirmed']=True
+                parsed=published_offer(platform,row['code'],row.get('description'),row['source_url'])
+                if parsed:
+                    for key in ('bank_restriction','card_type','requires_emi','requires_bnpl','requires_wallet','app_only'):
+                        row[key]=parsed[key]
+        return rows
 
     async def add_coupons_batch(self, coupons: list[dict]) -> int:
         """Batch insert multiple coupons."""
@@ -191,7 +279,7 @@ class CouponDB:
 
     async def get_coupon_count(self, platform: str) -> int:
         async with self.db.execute(
-            "SELECT COUNT(*) FROM coupons WHERE platform = ? AND is_active = 1",
+            "SELECT COUNT(*) FROM coupons WHERE platform = ? AND is_active = 1 AND (valid_until IS NULL OR valid_until >= date('now'))",
             (platform,),
         ) as cursor:
             row = await cursor.fetchone()
@@ -249,7 +337,7 @@ class CouponDB:
         async with self.lock:
             await self.db.execute(
                 """
-                INSERT INTO search_results (
+                INSERT OR REPLACE INTO search_results (
                     id, search_id, platform, flight_number, airline,
                     departure_time, arrival_time, duration, stops,
                     base_price, final_price, best_coupon_code, savings,
@@ -382,7 +470,7 @@ class CouponDB:
 
     async def get_external_savings(self, platform: str) -> list[dict]:
         async with self.db.execute(
-            "SELECT * FROM external_savings WHERE platform = ? AND is_active = 1",
+            "SELECT * FROM external_savings WHERE platform = ? AND is_active = 1 AND (valid_until IS NULL OR valid_until >= date('now'))",
             (platform,),
         ) as cursor:
             rows = await cursor.fetchall()
@@ -390,13 +478,14 @@ class CouponDB:
 
     # ── Notifications ──
 
-    async def add_notification(self, notif_type: str, title: str, message: str, data: dict = None):
+    async def add_notification(self, notif_type: str, title: str, message: str, data: dict = None,dedup_key=None):
         async with self.lock:
-            await self.db.execute(
-                "INSERT INTO notifications (type, title, message, data) VALUES (?, ?, ?, ?)",
-                (notif_type, title, message, json.dumps(data or {})),
+            cursor=await self.db.execute(
+                "INSERT OR IGNORE INTO notifications (type, title, message, data,dedup_key) VALUES (?, ?, ?, ?,?)",
+                (notif_type, title, message, json.dumps(data or {}),dedup_key),
             )
             await self.db.commit()
+            return cursor.rowcount==1
 
     async def get_notifications(self, unread_only: bool = False, limit: int = 50) -> list[dict]:
         query = "SELECT * FROM notifications"
@@ -579,17 +668,125 @@ class CouponDB:
                                       discount: float = None, base_price: float = None,
                                       route: str = None, search_id: str = None,
                                       error_msg: str = None):
-        """Record an individual coupon test outcome for learning."""
+        """Record an individual coupon test outcome for learning and update coupon_learnings immediately."""
         try:
+            code_upper = code.upper()
+            is_success = (result == "SUCCESS")
+            now_str = datetime.now().isoformat()
+
             async with self.lock:
+                # 1. Insert into coupon_test_results
                 await self.db.execute("""
                     INSERT INTO coupon_test_results 
                     (coupon_code, platform, test_result, discount_amount, base_price, route, search_id, error_message)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (code, platform, result, discount, base_price, route, search_id, error_msg))
+
+                # 2. Query existing learning stats
+                async with self.db.execute("""
+                    SELECT total_tests, successes, failures, avg_discount_amount, max_discount_amount, best_route, last_success_at, last_failure_at
+                    FROM coupon_learnings
+                    WHERE coupon_code = ? AND platform = ?
+                """, (code_upper, platform)) as cursor:
+                    row = await cursor.fetchone()
+
+                if row:
+                    total_tests = row["total_tests"] + 1
+                    successes = row["successes"] + (1 if is_success else 0)
+                    failures = row["failures"] + (0 if is_success else 1)
+
+                    old_avg = row["avg_discount_amount"] or 0.0
+                    old_successes = row["successes"]
+
+                    if is_success and discount is not None:
+                        avg_discount = (old_avg * old_successes + discount) / successes
+                        max_discount = max(row["max_discount_amount"] or 0.0, discount)
+                        last_success = now_str
+                        last_failure = row["last_failure_at"]
+                    else:
+                        avg_discount = old_avg
+                        max_discount = row["max_discount_amount"] or 0.0
+                        last_success = row["last_success_at"]
+                        last_failure = now_str if not is_success else row["last_failure_at"]
+
+                    best_route = row["best_route"]
+                else:
+                    total_tests = 1
+                    successes = 1 if is_success else 0
+                    failures = 0 if is_success else 1
+                    avg_discount = discount if (is_success and discount is not None) else 0.0
+                    max_discount = discount if (is_success and discount is not None) else 0.0
+                    last_success = now_str if is_success else None
+                    last_failure = None if is_success else now_str
+                    best_route = route
+
+                success_rate = successes / total_tests if total_tests > 0 else 0.0
+
+                # Compute trust score: success rate + recency bonus + total tests bonus
+                recency_bonus = 0.0
+                if last_success:
+                    try:
+                        days = (datetime.now() - datetime.fromisoformat(last_success)).days
+                        recency_bonus = max(0.0, 0.2 - (days * 0.01))
+                    except Exception:
+                        recency_bonus = 0.2
+                else:
+                    recency_bonus = 0.0
+
+                computed_trust = min(1.0, (success_rate * 0.7) + recency_bonus + (0.1 if total_tests >= 5 else 0.0))
+                is_dead = 1 if (total_tests >= 10 and successes == 0) else 0
+
+                # If we have a success, find the best route
+                if is_success and route:
+                    try:
+                        async with self.db.execute("""
+                            SELECT route, COUNT(*) as cnt FROM coupon_test_results
+                            WHERE coupon_code = ? AND platform = ? AND test_result = 'SUCCESS' AND route IS NOT NULL
+                            GROUP BY route ORDER BY cnt DESC LIMIT 1
+                        """, (code, platform)) as rcur:
+                            rrow = await rcur.fetchone()
+                            if rrow:
+                                best_route = rrow["route"]
+                    except Exception:
+                        pass
+
+                # Upsert into coupon_learnings
+                await self.db.execute("""
+                    INSERT INTO coupon_learnings
+                    (coupon_code, platform, total_tests, successes, failures, success_rate,
+                     avg_discount_amount, max_discount_amount, best_route, last_success_at,
+                     last_failure_at, computed_trust_score, is_dead, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(coupon_code, platform) DO UPDATE SET
+                        total_tests = excluded.total_tests,
+                        successes = excluded.successes,
+                        failures = excluded.failures,
+                        success_rate = excluded.success_rate,
+                        avg_discount_amount = excluded.avg_discount_amount,
+                        max_discount_amount = excluded.max_discount_amount,
+                        best_route = excluded.best_route,
+                        last_success_at = excluded.last_success_at,
+                        last_failure_at = excluded.last_failure_at,
+                        computed_trust_score = excluded.computed_trust_score,
+                        is_dead = excluded.is_dead,
+                        updated_at = excluded.updated_at
+                """, (code_upper, platform, total_tests, successes, failures, success_rate,
+                      avg_discount, max_discount, best_route, last_success, last_failure,
+                      computed_trust, is_dead, now_str))
+
+                # 3. Update the main coupons table trust_score, success_rate, and is_active (if dead)
+                await self.db.execute("""
+                    UPDATE coupons SET
+                        trust_score = ?,
+                        success_rate = ?,
+                        is_active = CASE WHEN ? = 1 THEN 0 ELSE is_active END,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE code = ? AND platform = ?
+                """, (computed_trust, success_rate, is_dead, code, platform))
+
                 await self.db.commit()
         except Exception as e:
-            logger.warning(f"Failed to save coupon test result: {e}")
+            logger.warning(f"Failed to save coupon test result and update learnings: {e}")
 
     async def get_smartest_coupons(self, platform: str, route: str = None,
                                     price: float = None) -> list[dict]:
@@ -728,8 +925,8 @@ class CouponDB:
             ("GOI", "GOX", "Manohar Mopa Airport", "Goa", 40, 600, 50),
             ("GOX", "GOI", "Dabolim Airport", "Goa", 40, 600, 50),
             # Delhi NCR
-            ("DEL", "HND", "Hindon Airport (Ghaziabad)", "Delhi NCR", 25, 500, 40),
-            ("HND", "DEL", "Indira Gandhi International", "Delhi NCR", 25, 500, 40),
+            ("DEL", "HDO", "Hindon Airport (Ghaziabad)", "Delhi NCR", 25, 500, 40),
+            ("HDO", "DEL", "Indira Gandhi International", "Delhi NCR", 25, 500, 40),
             # Mumbai / Pune
             ("BOM", "PNQ", "Pune Airport", "Western Maharashtra", 150, 1800, 180),
             ("PNQ", "BOM", "Chhatrapati Shivaji International", "Western Maharashtra", 150, 1800, 180),
@@ -768,3 +965,41 @@ class CouponDB:
         except Exception as e:
             logger.warning(f"Failed to seed airport alternatives: {e}")
 
+
+
+    async def record_quote(self, result):
+        from advisor_evidence import quote_segment_problem
+        meta = result['savings_breakdown']
+        quality = meta.get('integrity',{}).get('status') or ('checkout_verified' if meta.get('verification')=='checkout' else 'uncorroborated')
+        if result.get('platform')=='mock' or quality not in ('corroborated','checkout_verified') or quote_segment_problem(result) or meta.get('source_learning_allowed') is False or meta.get('source_transport')=='makemytrip_public_mcp':
+            return
+        async with self.lock:
+            await self.db.execute("""
+                INSERT INTO fare_quotes (route, departure_date, airline, flight_number, platform,
+                    passenger_count, cabin_class, price, verification, observed_at, coupon_code, quality_status,departure_time,stops,evidence,evidence_version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?,?,?,2)
+            """, (f"{meta['origin']}-{meta['destination']}", result['departure_date'], result['airline'],
+                result['flight_number'], result['platform'], meta['passenger_count'], meta['cabin_class'],
+                result['final_price'], meta['verification'], meta['observed_at'], result['best_coupon_code'], quality,result.get('departure_time'),result.get('stops'),
+                json.dumps({k:meta.get(k) for k in ('booking_url','segments','fare_family','baggage','source_transport','source_revision','source_learning_allowed','source_freshness','integrity','listed_price','listed_observed_at',
+                    'selected_payment','cart_options','payment_total_scope','fee_scope','fee_breakdown','coupon_coverage','fee_status')})))
+            await self.db.commit()
+
+    async def record_provider_run(self,task,platform,status,exc=None):
+        async with self.lock:
+            await self.db.execute('INSERT INTO provider_runs (search_id,platform,trip,status,reason_code,message,observed_at) VALUES (?,?,?,?,?,?,?)',
+                (task['search_id'],platform,json.dumps(task['trip']),status,getattr(exc,'code',None),str(exc)[:700] if exc else None,datetime.now(timezone.utc).isoformat()))
+            await self.db.commit()
+
+    async def get_quotes(self, route, departure_date, passenger_count=1, cabin_class='ECONOMY',preferred_time='ANY',max_stops=None):
+        async with self.db.execute("""SELECT * FROM fare_quotes WHERE route=? AND departure_date=?
+            AND passenger_count=? AND cabin_class=? AND evidence_version=2 AND quality_status IN ('corroborated','checkout_verified') ORDER BY observed_at ASC""",
+            (route, departure_date, passenger_count, cabin_class)) as cursor:
+            rows=[dict(row) for row in await cursor.fetchall()]
+        windows={'MORNING':(6,12),'AFTERNOON':(12,18),'EVENING':(18,24),'NIGHT':(0,6)}
+        if preferred_time in windows:
+            low,high=windows[preferred_time]
+            rows=[r for r in rows if r.get('departure_time') and low<=int(r['departure_time'][:2])<high]
+        if max_stops is not None:
+            rows=[r for r in rows if r.get('stops') is not None and r['stops']<=max_stops]
+        return rows

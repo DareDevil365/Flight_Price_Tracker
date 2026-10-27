@@ -1,21 +1,21 @@
 """
-Flight Finder — MakeMyTrip Worker
+Flight Finder â€” MakeMyTrip Worker
 Playwright-based worker that extracts real-time flight listings from MakeMyTrip.
-Utilizes classless DOM matching and falls back to LLM Vision if DOM parsing fails.
+Live fare evidence comes only from visible itinerary cards.
 """
 
 import asyncio
-import base64
 import json
+from time import monotonic
 from datetime import datetime
 from loguru import logger
 from .base_worker import BaseWorker
-from api_key_manager import api_key_manager
+
+LISTINGS_WAIT_SECONDS = 25
 
 
 class MakeMyTripWorker(BaseWorker):
     def __init__(self):
-        self._current_price = 5500.0
         self._intercepted_responses = []
         self._interception_event = asyncio.Event()
 
@@ -36,18 +36,10 @@ class MakeMyTripWorker(BaseWorker):
         return "input[placeholder*='coupon'], input[placeholder*='promo'], #coupon-input"
 
     async def _response_handler(self, response):
-        url = response.url
-        if "makemytrip" in url.lower() and any(k in url.lower() for k in ["listing", "search", "/api/"]):
-            try:
-                headers = response.headers
-                content_type = headers.get("content-type", "")
-                if "application/json" in content_type or "text/plain" in content_type:
-                    data = await response.json()
-                    self._intercepted_responses.append((url, data))
-                    logger.info(f"[MakeMyTripWorker] Intercepted API response: {url}")
-                    self._interception_event.set()
-            except Exception:
-                pass
+        # Live parsing uses the visible DOM. Do not decode or retain unrelated
+        # response bodies, especially after the user opens a booking session.
+        # BaseWorker independently keeps bounded HTTP failure metadata.
+        return
 
     def find_value_by_keys(self, d, keys, default=None):
         for key in keys:
@@ -211,7 +203,7 @@ class MakeMyTripWorker(BaseWorker):
         if not isinstance(d, dict):
             return None
         price = self.find_numeric_by_keys(d, ["basePrice", "price", "amount", "fB", "pr", "fare", "base_price", "val", "value", "numericValue", "baseFare", "basefare", "Fare", "totalFare", "totalfare"])
-        if price is None or price < 1200:
+        if price is None or price <= 0:
             return None
         flight_number = self.find_string_by_keys(d, ["flightNumber", "flightNo", "fN", "fn", "flightCode", "code", "flightNum", "fltNum", "flight_number"])
         airline = self.find_string_by_keys(d, ["airlineName", "airline", "alN", "carrier", "name", "airline_name"])
@@ -238,10 +230,10 @@ class MakeMyTripWorker(BaseWorker):
                 if k in airline_lower:
                     prefix = v
                     break
-            flight_number = f"{prefix}-0000"
+            flight_number = ""
             
-        departure_time = self.parse_time_value(self.find_value_by_keys(d, ["departureTime", "depTime", "dt", "fdt", "departure", "startTime", "departure_time"])) or "06:00"
-        arrival_time = self.parse_time_value(self.find_value_by_keys(d, ["arrivalTime", "arrTime", "at", "fat", "arrival", "endTime", "arrival_time"])) or "08:15"
+        departure_time = self.parse_time_value(self.find_value_by_keys(d, ["departureTime", "depTime", "dt", "fdt", "departure", "startTime", "departure_time"])) or ""
+        arrival_time = self.parse_time_value(self.find_value_by_keys(d, ["arrivalTime", "arrTime", "at", "fat", "arrival", "endTime", "arrival_time"])) or ""
         
         duration = self.parse_duration_value(self.find_value_by_keys(d, ["duration", "totalDuration", "dur", "td", "flightDuration", "timeTaken"]))
         if not duration:
@@ -300,301 +292,61 @@ class MakeMyTripWorker(BaseWorker):
         self._interception_event.clear()
         
         # Register response listener
-        page.on("response", self._response_handler)
+        self.attach_response_listener(page)
         
         await page.goto(self.base_url, timeout=30000, wait_until="domcontentloaded")
         await asyncio.sleep(2.0)
         
-        # Attempt to dismiss login overlay popup
-        try:
-            logger.info("[MakeMyTripWorker] Attempting to dismiss popup overlay...")
-            await page.keyboard.press("Escape")
-            await asyncio.sleep(1.0)
-            
-            close_btn = await page.query_selector(".commonModal__close, [data-cy='closeModal']")
-            if close_btn:
-                await close_btn.click()
-                logger.info("[MakeMyTripWorker] Popup overlay dismissed via close button.")
-                await asyncio.sleep(1.0)
-        except Exception as e:
-            logger.debug(f"[MakeMyTripWorker] No popup to dismiss or error: {e}")
+        from provider_homepage import dismiss_makemytrip_login
+        await dismiss_makemytrip_login(page)
 
     async def input_search_criteria(self, page, trip: dict) -> None:
-        origin = trip.get("origin", "")
-        dest = trip.get("destination", "")
-        date_str = trip.get("departure_date", "") # Expects YYYY-MM-DD
-        
-        # Convert YYYY-MM-DD to DD/MM/YYYY for MMT itinerary query format
-        try:
-            dt = datetime.strptime(date_str, "%Y-%m-%d")
-            formatted_date = dt.strftime("%d/%m/%Y")
-        except Exception:
-            formatted_date = date_str
+        from quotes import search_url
+        self._trip = trip
+        self._intercepted_responses.clear()
+        self._interception_event.clear()
+        self.attach_response_listener(page)
+        await page.goto(search_url('makemytrip', trip), timeout=45000, wait_until='domcontentloaded')
+        # Normal dispatch uses this direct URL, not navigate_to_search(). The
+        # optional login dialog must therefore be handled on this active path.
+        from provider_homepage import dismiss_makemytrip_login
+        await dismiss_makemytrip_login(page)
 
-        # Direct MakeMyTrip search URL construction to bypass autocomplete selection widget struggles
-        query_url = f"https://www.makemytrip.com/flight/search?itinerary={origin}-{dest}-{formatted_date}&tripType=O&paxType=A-1_C-0_I-0&intl=false&cabinClass=E"
-        logger.info(f"[MakeMyTripWorker] Navigating directly to search query: {query_url}")
-        await page.goto(query_url, timeout=35000, wait_until="domcontentloaded")
-        await asyncio.sleep(4.0)
 
     async def execute_search(self, page) -> None:
-        logger.info("[MakeMyTripWorker] Waiting for flight search API response...")
-        try:
-            # Wait up to 25 seconds for the API interception event
-            await asyncio.wait_for(self._interception_event.wait(), timeout=25.0)
-            logger.info("[MakeMyTripWorker] Intercepted flight search API response successfully.")
-        except asyncio.TimeoutError:
-            logger.warning("[MakeMyTripWorker] API response interception timed out, waiting for DOM elements instead.")
-            try:
-                await page.wait_for_selector(".listingCard, div[id*='listing-id'], .fli-list", timeout=10000)
-                await asyncio.sleep(2.0)
-            except Exception:
-                logger.warning("[MakeMyTripWorker] Settle selector timeout, trying to parse anyway.")
+        from provider_homepage import dismiss_makemytrip_login
+        from provider_status import page_problem, ProviderError
+        deadline = monotonic() + LISTINGS_WAIT_SECONDS
+        # A login dialog may hydrate after navigation. Recheck while waiting;
+        # do not spend the entire listing timeout behind a closeable overlay.
+        while True:
+            await dismiss_makemytrip_login(page, wait_ms=0)
+            state = await page.evaluate('''() => ({
+                text: (document.body?.innerText || ''),
+                cards: [...document.querySelectorAll('.listingCard, [id*="listing-id"], .fli-list')]
+                    .some(e => e.checkVisibility() && e.getBoundingClientRect().width>0)
+            })''')
+            problem = page_problem(state['text'], page.url, getattr(self, '_http_failures', []))
+            if problem:
+                raise problem
+            if state['cards']:
+                return
+            if monotonic() >= deadline:
+                raise ProviderError('SEARCH_TIMEOUT',
+                    'MakeMyTrip did not load readable flight listings within the search deadline. No fare or payment total was verified; use the manual search link.')
+            await asyncio.sleep(min(.25, max(0, deadline-monotonic())))
 
     async def parse_search_results(self, page) -> list[dict]:
-        logger.info("[MakeMyTripWorker] Extracting flight options...")
-        
-        try:
-            page.remove_listener("response", self._response_handler)
-        except Exception:
-            pass
-
-        # 1. Attempt API Interception Parsing
-        if self._intercepted_responses:
-            logger.info(f"[MakeMyTripWorker] Attempting to parse {len(self._intercepted_responses)} intercepted responses...")
-            flights = []
-            for url, data in self._intercepted_responses:
-                try:
-                    parsed = self.find_flight_arrays(data)
-                    if parsed:
-                        flights.extend(parsed)
-                except Exception as e:
-                    logger.error(f"[MakeMyTripWorker] Error parsing API data: {e}")
-            
-            if flights:
-                deduped = []
-                seen = set()
-                for f in flights:
-                    key = (f["flight_number"], f["departure_time"], f["base_price"])
-                    if key not in seen:
-                        seen.add(key)
-                        deduped.append(f)
-                logger.info(f"[MakeMyTripWorker] Parsed {len(deduped)} unique flights successfully via API interception.")
-                return deduped
-
-        # 2. Attempt Classless DOM Extraction
-        flights = await self._parse_via_dom(page)
-        if flights:
-            logger.info(f"[MakeMyTripWorker] Parsed {len(flights)} flights successfully via DOM.")
-            return flights
-
-        # 3. Fallback to Screenshot + LLM Vision
-        logger.warning("[MakeMyTripWorker] DOM parsing returned 0 flights. Falling back to LLM Vision...")
-        try:
-            flights = await self._parse_via_vision(page)
-            if flights:
-                logger.info(f"[MakeMyTripWorker] Parsed {len(flights)} flights successfully via LLM Vision.")
-                return flights
-        except Exception as e:
-            logger.error(f"[MakeMyTripWorker] LLM Vision parsing failed: {e}")
-
-        # 4. Return empty list on failure (Phase 0)
-        logger.warning("[MakeMyTripWorker] All extraction strategies failed. Returning empty list.")
-        return []
+        # Generic recursive JSON matching and vision estimates are retained below
+        # only for research tests. Live fares require exact visible card evidence.
+        from provider_homepage import dismiss_makemytrip_login
+        await dismiss_makemytrip_login(page, wait_ms=0)
+        return await self._parse_via_dom(page)
 
     async def _parse_via_dom(self, page) -> list[dict]:
-        """Extract flights from DOM using MakeMyTrip layout markers."""
-        js_extractor = """
-        () => {
-            const results = [];
-            // Select MakeMyTrip listing card elements
-            const cards = Array.from(document.querySelectorAll('.listingCard, div[id*="listing-id"], .fli-list, div[class*="listingCard"]'));
-            
-            for (const card of cards) {
-                const text = card.innerText || "";
-                if (!text.includes("₹") && !text.includes("Rs") && !text.toLowerCase().includes("book") && !text.toLowerCase().includes("lock")) continue;
+        from .listing_parser import parse_cards
+        return await parse_cards(page, '.listingCard, [id*="listing-id"], .fli-list')
 
-                const lines = text.split('\\n').map(l => l.trim()).filter(l => l.length > 0);
-                if (lines.length < 3) continue;
-
-                // Extract Price
-                let priceVal = 0;
-                const priceRegex = /(?:₹|Rs\\.?|\\$)?\\s*([\\d,]+)/;
-                let possiblePrices = [];
-                for (let i = 0; i < lines.length; i++) {
-                    const line = lines[i];
-                    const lowLine = line.toLowerCase();
-                    
-                    // Skip lock prices or promo/discount lines
-                    if (lowLine.includes("lock") || (i > 0 && lines[i-1].toLowerCase().includes("lock"))) {
-                        continue;
-                    }
-                    if (lowLine.includes("off") || lowLine.includes("save") || lowLine.includes("discount") || 
-                        lowLine.includes("cashback") || lowLine.includes("coupon") || lowLine.includes("promo") || 
-                        lowLine.includes("fee") || lowLine.includes("tax") || lowLine.includes("gst") || 
-                        lowLine.includes("charge") || lowLine.includes("seat") || lowLine.includes("extra")) {
-                        continue;
-                    }
-                    
-                    // Clean line of currency/spaces/commas
-                    const cleanLine = lowLine.replace(/[₹\$\s,]/g, "");
-                    // If it contains letters (except 'rs') or colons, skip (e.g. times, flight numbers, duration)
-                    if (cleanLine.match(/[a-z:]/i)) {
-                        if (!cleanLine.startsWith("rs")) {
-                            continue;
-                        }
-                    }
-                    
-                    const match = line.match(priceRegex);
-                    if (match) {
-                        const parsed = parseFloat(match[1].replace(/,/g, ''));
-                        if (parsed > 0) {
-                            possiblePrices.push(parsed);
-                        }
-                    }
-                }
-                
-                // Filter prices to find actual fares (usually >= 1200)
-                const fares = possiblePrices.filter(p => p >= 1200);
-                if (fares.length > 0) {
-                    priceVal = fares[0]; // first one that looks like a fare
-                } else {
-                    // last resort: search all lines with literal currency symbol
-                    for (const line of lines) {
-                        const match = line.match(/(?:₹|Rs\\.?|\\$)\\s*([\\d,]+)/);
-                        if (match) {
-                            const val = parseFloat(match[1].replace(/,/g, ''));
-                            if (val >= 1200) {
-                                priceVal = val;
-                                break;
-                            }
-                        }
-                    }
-                }
-                if (!priceVal) continue;
-
-                // Extract Stops
-                let stops = 0;
-                if (text.toLowerCase().includes("nonstop") || text.toLowerCase().includes("non - stop") || text.toLowerCase().includes("non-stop")) {
-                    stops = 0;
-                } else if (text.toLowerCase().includes("1 stop")) {
-                    stops = 1;
-                } else if (text.toLowerCase().includes("2 stops")) {
-                    stops = 2;
-                }
-
-                // Extract Airline
-                const knownAirlines = ["IndiGo", "Air India", "Vistara", "Akasa Air", "SpiceJet", "Alliance Air", "Air India Express", "FlyBig", "Star Air"];
-                let airline = "Unknown";
-                for (const line of lines) {
-                    const matched = knownAirlines.find(a => line.toLowerCase() === a.toLowerCase() || line.includes(a));
-                    if (matched) {
-                        airline = matched;
-                        break;
-                    }
-                }
-                
-                // Extract Times
-                let departure_time = "06:00";
-                let arrival_time = "08:15";
-                const timeRegex = /(\\d{2}:\\d{2})\\s*(?:–|-|\\n)?\\s*(\\d{2}:\\d{2})/;
-                const timeMatch = text.match(timeRegex);
-                if (timeMatch) {
-                    departure_time = timeMatch[1].trim();
-                    arrival_time = timeMatch[2].trim();
-                }
-
-                // Extract Duration
-                let duration = "2h 15m";
-                const durationRegex = /(\\d+h\\s*\\d*m?)/i;
-                const durMatch = text.match(durationRegex);
-                if (durMatch) {
-                    duration = durMatch[1].trim();
-                }
-
-                // Extract real flight number from card text or generate deterministically
-                const flightNumRegex = /\\b(6E|AI|UK|SG|QP|I5|IX|S5|2T|G8)\\s*[-]?\\s*(\\d{3,4})\\b/i;
-                const fnMatch = text.match(flightNumRegex);
-                let flight_number = "";
-                if (fnMatch) {
-                    flight_number = fnMatch[1].toUpperCase() + "-" + fnMatch[2];
-                } else {
-                    const cleanTime = (departure_time + arrival_time).replace(/[^0-9]/g, '');
-                    const prefixMap = { "indigo": "6E", "air india": "AI", "vistara": "UK", "akasa": "QP", "spicejet": "SG" };
-                    let prefix = "FL";
-                    for (const k in prefixMap) {
-                        if (airline.toLowerCase().includes(k)) {
-                            prefix = prefixMap[k];
-                            break;
-                        }
-                    }
-                    flight_number = prefix + "-" + (cleanTime || "0000");
-                }
-
-                results.push({
-                    flight_number,
-                    airline,
-                    departure_time,
-                    arrival_time,
-                    duration,
-                    stops,
-                    base_price: priceVal
-                });
-            }
-            return results;
-        }
-        """
-        try:
-            return await page.evaluate(js_extractor)
-        except Exception as e:
-            logger.error(f"[MakeMyTripWorker] DOM evaluation failed: {e}")
-            return []
-
-    async def _parse_via_vision(self, page) -> list[dict]:
-        """Convert page to screenshot and query LLM vision model to parse flight results."""
-        screenshot_bytes = await page.screenshot(type="jpeg", quality=40)
-        image_b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
-
-        prompt = """
-        Inspect this MakeMyTrip flight search results screen.
-        Identify and extract the top 3 cheapest flight options.
-        For each flight, output a JSON object containing:
-        - flight_number: (e.g. 6E-201, generate based on airline if not explicitly visible)
-        - airline: (e.g. IndiGo, Air India, Vistara)
-        - departure_time: (e.g. 06:15)
-        - arrival_time: (e.g. 08:30)
-        - duration: (e.g. 2h 15m)
-        - stops: (integer, 0 for nonstop, 1, 2)
-        - base_price: (numeric value, e.g. 5400)
-
-        Return strictly a JSON array of objects with these keys. No markdown backticks, no wrapping in ```json, and no other text.
-        """
-        
-        client, model, key_str = api_key_manager.get_client("brute")
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are a professional browser automation helper with vision capabilities. Output strictly valid JSON arrays."},
-                {"role": "user", "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {
-                        "url": f"data:image/jpeg;base64,{image_b64}"
-                    }}
-                ]}
-            ],
-            temperature=0.0
-        )
-        res_text = response.choices[0].message.content.strip()
-        clean_res = res_text.replace("```json", "").replace("```", "").strip()
-        flights = json.loads(clean_res)
-        
-        for f in flights:
-            f["base_price"] = float(f.get("base_price", 5000))
-        return flights
-
-    # ── No-Op implementations for ticketing automation pipeline phases ──
-    async def select_flight(self, page, flight: dict) -> None:
-        pass
 
     async def fill_passenger_details(self, page) -> None:
         pass
@@ -606,127 +358,18 @@ class MakeMyTripWorker(BaseWorker):
         pass
 
     async def is_at_checkout(self, page) -> bool:
-        return True
+        return await super().is_at_checkout(page)
+
 
 
 
     async def detect_captcha(self, page) -> bool:
-        return False
+        return await super().detect_captcha(page)
+
 
     async def health_check(self, page) -> bool:
         return True
 
     async def scrape_onsite_coupons(self, page) -> list[dict]:
-        """Scrape coupon codes visible on the MakeMyTrip checkout screen."""
-        from datetime import datetime, timedelta
-        import re
-        
-        js_extractor = """
-        () => {
-            const coupons = [];
-            const cards = Array.from(document.querySelectorAll('.couponItem, .coupon-list-item, .promo-item, .offer-card, [class*="coupon"], [class*="promo"]'));
-            
-            const seen = new Set();
-            const codeRegex = /^[A-Z0-9]{3,15}$/;
-            
-            for (const card of cards) {
-                const text = card.innerText || "";
-                let code = "";
-                const codeEl = card.querySelector('.couponCode, .promo-code, [class*="code"], strong, b');
-                if (codeEl) {
-                    code = codeEl.innerText.trim().toUpperCase();
-                }
-                
-                if (!code || !codeRegex.test(code) || code === "APPLY" || code === "REMOVE") {
-                    const words = text.split(/\\s+/);
-                    for (const w of words) {
-                        const cleanW = w.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-                        if (codeRegex.test(cleanW) && cleanW !== "APPLY" && cleanW !== "REMOVE" && cleanW !== "COUPON" && cleanW !== "PROMO" && cleanW.length >= 3) {
-                            code = cleanW;
-                            break;
-                        }
-                    }
-                }
-                
-                if (code && !seen.has(code) && codeRegex.test(code) && code !== "APPLY" && code !== "REMOVE") {
-                    seen.add(code);
-                    
-                    let desc = "";
-                    const descEl = card.querySelector('.couponDescription, .promo-desc, [class*="desc"], [class*="detail"]');
-                    if (descEl) {
-                        desc = descEl.innerText.trim();
-                    } else {
-                        desc = text.replace(code, "").replace(/\\n/g, " ").trim();
-                    }
-                    
-                    coupons.push({
-                        "platform": "makemytrip",
-                        "code": code,
-                        "description": desc || `MMT checkout promo code ${code}`
-                    });
-                }
-            }
-            return coupons;
-        }
-        """
-        try:
-            results = await page.evaluate(js_extractor)
-            parsed_coupons = []
-            today = datetime.now()
-            expiry = (today + timedelta(days=60)).strftime("%Y-%m-%d")
-            
-            for c in results:
-                desc = c["description"]
-                code = c["code"]
-                
-                discount_type = "FLAT"
-                discount_value = 100.0
-                min_booking_value = 0.0
-                bank_restriction = None
-                card_type = "ANY"
-                
-                pct_match = re.search(r'(\d+)\s*%', desc)
-                if pct_match:
-                    discount_type = "PERCENT"
-                    discount_value = float(pct_match.group(1))
-                else:
-                    flat_match = re.search(r'(?:Rs\.?|₹|Rs)\s*(\d+[\d,]*)', desc, re.IGNORECASE)
-                    if flat_match:
-                        discount_type = "FLAT"
-                        discount_value = float(flat_match.group(1).replace(",", ""))
-                
-                min_match = re.search(r'(?:min(?:imum)?\b.*?|above\s+|spend\s+)(?:Rs\.?|₹|Rs)?\s*(\d+[\d,]*)', desc, re.IGNORECASE)
-                if min_match:
-                    min_booking_value = float(min_match.group(1).replace(",", ""))
-                    
-                known_banks = ["HDFC", "ICICI", "SBI", "AXIS", "HSBC", "KOTAK", "CITI", "YES", "BOB"]
-                for b in known_banks:
-                    if re.search(r'\b' + b + r'\b', desc, re.IGNORECASE):
-                        bank_restriction = b
-                        break
-                        
-                if re.search(r'\bcredit\b', desc, re.IGNORECASE):
-                    card_type = "CREDIT"
-                elif re.search(r'\bdebit\b', desc, re.IGNORECASE):
-                    card_type = "DEBIT"
-                    
-                parsed_coupons.append({
-                    "platform": "makemytrip",
-                    "code": code,
-                    "description": desc,
-                    "bank_restriction": bank_restriction,
-                    "card_type": card_type,
-                    "discount_type": discount_type,
-                    "discount_value": discount_value,
-                    "min_booking_value": min_booking_value,
-                    "valid_from": today.strftime("%Y-%m-%d"),
-                    "valid_until": expiry,
-                    "is_active": 1,
-                    "source": "scraped",
-                    "source_type": "platform_native",
-                    "trust_score": 0.95
-                })
-            return parsed_coupons
-        except Exception as e:
-            logger.warning(f"[MakeMyTripWorker] Failed to scrape onsite coupons: {e}")
-            return []
+        from offer_parser import scrape_published_offers
+        return await scrape_published_offers(page, self.platform_id)

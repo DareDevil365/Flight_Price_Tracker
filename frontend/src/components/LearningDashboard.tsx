@@ -10,7 +10,7 @@ import {
 import { useLearningStore } from "../store";
 
 interface LearningDashboardProps {
-  sendMessage: (type: string, payload: any) => void;
+  sendMessage: (type: string, payload: Record<string, unknown>) => void;
 }
 
 type SubTab = "overview" | "suggestions" | "journal";
@@ -29,15 +29,16 @@ export default function LearningDashboard({ sendMessage }: LearningDashboardProp
   };
 
   useEffect(() => {
-    fetchDashboardData();
-  }, []);
+    sendMessage('learning:dashboard:get', {});
+    sendMessage('learning:journal:get', {});
+  }, [sendMessage]);
 
   if (!dashboardData) {
     return (
       <div className="page-container">
         <div className="page-header">
           <h1 className="page-title">System Intelligence</h1>
-          <p className="page-subtitle">Autonomous learning, pipeline health optimization, and decision logs.</p>
+          <p className="page-subtitle">Observed provider searches and scoped coupon trials. Forecast accuracy is shown only when calibrated for your trip.</p>
         </div>
         <div className="glass-card empty-state">
           <Brain size={48} className="empty-state-icon animate-pulse-slow" style={{ color: "hsl(var(--color-primary))" }} />
@@ -123,11 +124,11 @@ export default function LearningDashboard({ sendMessage }: LearningDashboardProp
           <div style={{ position: "absolute", top: -10, right: -10, opacity: 0.05 }}>
             <Brain size={80} />
           </div>
-          <div style={{ fontSize: 11, color: "hsl(var(--text-muted))", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Learning Cycles</div>
+          <div style={{ fontSize: 11, color: "hsl(var(--text-muted))", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Provider Searches</div>
           <div style={{ fontSize: 24, fontWeight: 800, margin: "6px 0", color: "hsl(var(--text-primary))" }}>
-            #{dashboardData.cycle_count}
+            {dashboardData.provider_run_count ?? 'Unavailable'}
           </div>
-          <div style={{ fontSize: 10, color: "hsl(var(--text-muted))" }}>Runs automatically every 6 hours</div>
+          <div style={{ fontSize: 10, color: "hsl(var(--text-muted))" }}>Recorded retrieval attempts in the last 7 days</div>
         </div>
 
         {/* Card 2: Improvements */}
@@ -135,11 +136,11 @@ export default function LearningDashboard({ sendMessage }: LearningDashboardProp
           <div style={{ position: "absolute", top: -10, right: -10, opacity: 0.05 }}>
             <Zap size={80} />
           </div>
-          <div style={{ fontSize: 11, color: "hsl(var(--text-muted))", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Improvements Applied</div>
+          <div style={{ fontSize: 11, color: "hsl(var(--text-muted))", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Coupon Trial Runs</div>
           <div style={{ fontSize: 24, fontWeight: 800, margin: "6px 0", color: "hsl(var(--color-success))" }}>
-            {dashboardData.improvements_count}
+            {dashboardData.coupon_stats?.run_count ?? 'Unavailable'}
           </div>
-          <div style={{ fontSize: 10, color: "hsl(var(--text-muted))" }}>Autonomous database tuning logs</div>
+          <div style={{ fontSize: 10, color: "hsl(var(--text-muted))" }}>Results depend on the exact booking and payment</div>
         </div>
 
         {/* Card 3: MAPE */}
@@ -147,11 +148,11 @@ export default function LearningDashboard({ sendMessage }: LearningDashboardProp
           <div style={{ position: "absolute", top: -10, right: -10, opacity: 0.05 }}>
             <TrendingUp size={80} />
           </div>
-          <div style={{ fontSize: 11, color: "hsl(var(--text-muted))", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Forecaster Error (MAPE)</div>
+          <div style={{ fontSize: 11, color: "hsl(var(--text-muted))", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Forecast Accuracy</div>
           <div style={{ fontSize: 24, fontWeight: 800, margin: "6px 0", color: "hsl(var(--color-primary))" }}>
-            {(dashboardData.prediction_accuracy?.avg_mape * 100).toFixed(2)}%
+            {dashboardData.prediction_accuracy?.available && dashboardData.prediction_accuracy.avg_mape != null ? `${(dashboardData.prediction_accuracy.avg_mape * 100).toFixed(2)}%` : 'Not calibrated'}
           </div>
-          <div style={{ fontSize: 10, color: "hsl(var(--text-muted))" }}>Based on {dashboardData.prediction_accuracy?.total_audited} audited forecasts</div>
+          <div style={{ fontSize: 10, color: "hsl(var(--text-muted))" }}>Check the exact route and date in Price History</div>
         </div>
 
         {/* Card 4: Coupons */}
@@ -159,11 +160,11 @@ export default function LearningDashboard({ sendMessage }: LearningDashboardProp
           <div style={{ position: "absolute", top: -10, right: -10, opacity: 0.05 }}>
             <ShieldAlert size={80} />
           </div>
-          <div style={{ fontSize: 11, color: "hsl(var(--text-muted))", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Dead Coupons Shelved</div>
+          <div style={{ fontSize: 11, color: "hsl(var(--text-muted))", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Coupon Trials</div>
           <div style={{ fontSize: 24, fontWeight: 800, margin: "6px 0", color: "hsl(var(--color-warning))" }}>
-            {dashboardData.coupon_stats?.dead_coupons} / {dashboardData.coupon_stats?.total_tracked}
+            {dashboardData.coupon_stats?.trial_count ?? 'Unavailable'}
           </div>
-          <div style={{ fontSize: 10, color: "hsl(var(--text-muted))" }}>Avg Success: {(dashboardData.coupon_stats?.avg_success_rate * 100).toFixed(1)}%</div>
+          <div style={{ fontSize: 10, color: "hsl(var(--text-muted))" }}>{dashboardData.coupon_stats?.review_accepted_trials ?? 0} review acceptances; {dashboardData.coupon_stats?.checkout_accepted_trials ?? 0} confirmed checkout trials</div>
         </div>
       </div>
 
@@ -202,7 +203,7 @@ export default function LearningDashboard({ sendMessage }: LearningDashboardProp
               <span style={{ fontSize: 12, fontWeight: 600 }}>About Pipeline Monitoring</span>
             </div>
             <p style={{ margin: "6px 0 0 0", fontSize: 11, color: "hsl(var(--text-secondary))", lineHeight: 1.5 }}>
-              The system tracks scraper outcomes in real time. Platforms that trigger CAPTCHAs, timeout issues, or DOM modifications drop in reliability score. If a platform drops below 40% success rate, the self-learning engine automatically flags it and adjusts scrapers to use longer delays, proxy rotation, or stops hitting it to save resources.
+              These are recorded listing retrieval outcomes from the last seven days. A retrieved listing does not prove a current checkout price or successful coupon. Website access and page layouts can change.
             </p>
           </div>
 
@@ -243,7 +244,7 @@ export default function LearningDashboard({ sendMessage }: LearningDashboardProp
                         <span style={{ fontSize: 9, color: "hsl(var(--text-muted))", display: "block" }}>AVG LATENCY</span>
                         <span style={{ fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
                           <Clock size={12} style={{ color: "hsl(var(--text-muted))" }} />
-                          {(metrics.avg_latency_ms / 1000).toFixed(2)}s
+                          {metrics.avg_latency_ms == null ? 'Not recorded' : `${(metrics.avg_latency_ms / 1000).toFixed(2)}s`}
                         </span>
                       </div>
                     </div>
@@ -265,7 +266,7 @@ export default function LearningDashboard({ sendMessage }: LearningDashboardProp
               <span style={{ fontSize: 12, fontWeight: 600 }}>Suggestion Acceptance Analytics</span>
             </div>
             <p style={{ margin: "6px 0 0 0", fontSize: 11, color: "hsl(var(--text-secondary))", lineHeight: 1.5 }}>
-              This chart captures user responsiveness to saving recommendations. Clicks represent attention, while Accepts represent confirmed bookings routed through a given recommendation. The self-learning engine de-prioritizes recommendations that consistently yield under 5% acceptance after 50+ impressions.
+              Suggestion click and acceptance tracking from older research is not a confirmed booking record. Current timing advice is based on exact-trip evidence and reports when forecast validation is unavailable.
             </p>
           </div>
 
@@ -308,7 +309,7 @@ export default function LearningDashboard({ sendMessage }: LearningDashboardProp
               <span style={{ fontSize: 12, fontWeight: 600 }}>About the Process Journal</span>
             </div>
             <p style={{ margin: "6px 0 0 0", fontSize: 11, color: "hsl(var(--text-secondary))", lineHeight: 1.5 }}>
-              The Process Journal is the audit log of all decisions automatically taken by the Self-Learning engine. It logs changes in prediction weights, coupon trust rankings, pipeline health adjustments, and suggestions tuning. It represents full transparency in how the engine adapts over time.
+              This journal contains older research events. It is retained for reference and does not describe the current fare and forecast decision path.
             </p>
           </div>
 
@@ -319,9 +320,9 @@ export default function LearningDashboard({ sendMessage }: LearningDashboardProp
 
             {activeJournal.length > 0 ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 16, maxHeight: 500, overflowY: "auto", paddingRight: 8 }}>
-                {activeJournal.map((entry: any, index: number) => {
+                {activeJournal.map((entry, index: number) => {
                   const style = getJournalCategoryStyles(entry.category);
-                  const formattedTime = new Date(entry.recorded_at || entry.timestamp).toLocaleString("en-IN", {
+                  const formattedTime = new Date(entry.recorded_at || entry.timestamp || '').toLocaleString("en-IN", {
                     month: "short",
                     day: "numeric",
                     hour: "2-digit",

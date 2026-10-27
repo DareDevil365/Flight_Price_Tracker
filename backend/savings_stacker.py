@@ -73,7 +73,7 @@ class SavingsStacker:
             # 2. Evaluate Wallet Offers (Amazon Pay, Paytm)
             elif offer["savings_type"] == "wallet_offer":
                 # Check if wallet offers are allowed by user profile
-                if financial_profile.get("allow_wallet_offers", True):
+                if not bank_restriction and "WALLET" in financial_profile.get("allowed_card_types", []) and financial_profile.get("allow_wallet_offers", True):
                     min_tx = offer.get("min_transaction") or 0.0
                     if checkout_price_with_fee >= min_tx:
                         val = 0.0
@@ -96,7 +96,7 @@ class SavingsStacker:
                             }
 
             # 3. Evaluate UPI Offers (PhonePe, GPay)
-            elif offer["savings_type"] == "upi_offer":
+            elif offer["savings_type"] == "upi_offer" and not bank_restriction and "UPI" in financial_profile.get("allowed_card_types", []):
                 min_tx = offer.get("min_transaction") or 0.0
                 if checkout_price_with_fee >= min_tx:
                     val = 0.0
@@ -120,7 +120,7 @@ class SavingsStacker:
 
         # 4. Calculate Credit Card Reward Points
         card_rates = financial_profile.get("card_reward_rates", [])
-        if card_rates:
+        if card_rates and "CREDIT" in financial_profile.get("allowed_card_types", []):
             for card in card_rates:
                 bank = card.get("bank", "")
                 if bank in financial_profile.get("blacklisted_banks", []):
@@ -182,12 +182,12 @@ def calculate_net_emi_savings(coupon_code: str, coupon_desc: str, requires_emi: 
     coupon_code_upper = (coupon_code or "").upper()
     coupon_desc_lower = (coupon_desc or "").lower()
     
-    is_emi = requires_emi or "emi" in coupon_code_upper or "emi" in coupon_desc_lower
+    is_emi = requires_emi or "EMI" in coupon_code_upper or "emi" in coupon_desc_lower
     if not is_emi:
         return face_discount, 0.0, ""
 
     # Check if No-Cost EMI
-    is_nocost = "nocost" in coupon_code_upper or "no cost" in coupon_desc_lower or "no-cost" in coupon_desc_lower or "zero interest" in coupon_desc_lower
+    is_nocost = "NOCOST" in coupon_code_upper or "no cost" in coupon_desc_lower or "no-cost" in coupon_desc_lower or "zero interest" in coupon_desc_lower
     
     # Upfront transaction amount = base_price - face_discount
     transaction_amount = max(0.0, base_price - face_discount)

@@ -1,0 +1,9 @@
+# Dependencies for legacy predictor/RAG tests; not needed by the live app.
+-r requirements-dev.txt
+numpy==2.5.3
+pandas==3.0.6
+holidays==0.106
+xgboost==3.4.1
+scikit-learn==1.9.1
+optuna==5.0.0
+

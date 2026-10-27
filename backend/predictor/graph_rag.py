@@ -439,6 +439,48 @@ class GraphRAGEngine:
             else:
                 retrieved_facts.append(f"Macro Note: Brent crude is stable at ${brent_usd:.2f}/bbl.")
 
+            # 5. Semantic node lookup complement (TF-IDF / keyword similarity lookup)
+            destination = route.split("-")[1].upper() if "-" in route else route
+            semantic_query = f"{route} {destination}"
+            if month in [6, 7, 8, 9]:
+                semantic_query += " monsoon rain off-peak discount"
+            elif month in [10, 11, 12, 1, 2]:
+                semantic_query += " festival peak wedding surge"
+
+            async with conn.execute("SELECT node_id, node_type, properties_json FROM graph_nodes") as cursor:
+                node_rows = await cursor.fetchall()
+                all_nodes = [dict(nr) for nr in node_rows]
+
+            if all_nodes:
+                semantic_results = self._compute_tfidf_and_cosine_similarity(semantic_query, all_nodes, top_k=3, threshold=0.1)
+                for res in semantic_results:
+                    node = res["node"]
+                    sim = res["similarity"]
+                    node_id = node["node_id"]
+
+                    # Skip if we already processed this route or month node directly
+                    if node_id in [route_node, month_node]:
+                        continue
+
+                    props = json.loads(node["properties_json"])
+                    node_type = node["node_type"]
+
+                    # Add to retrieved facts
+                    fact_msg = f"Semantically matched node {node_id} ({node_type}, similarity: {sim:.2f})"
+                    if node_type == "BANK_OFFER":
+                        fact_msg += f": Offer {props.get('name')} active."
+                        scores.append({"factor": f"Semantic bank offer {props.get('name')}", "weight": -0.05})
+                    elif node_type == "PATTERN":
+                        fact_msg += f": Pattern {props.get('pattern_id')} - {props.get('description')}."
+                        if "observed_price_rise_pct" in props:
+                            scores.append({"factor": props["description"], "weight": props["observed_price_rise_pct"] / 150.0})
+                        elif "observed_price_drop_pct" in props:
+                            scores.append({"factor": props["description"], "weight": -props["observed_price_drop_pct"] / 150.0})
+                    elif node_type == "MACRO_EVENT":
+                        fact_msg += f": Macro event {props.get('title') or props.get('name')}."
+
+                    retrieved_facts.append(fact_msg)
+
         # Compute net recommendation score
         # Weighted score: sum of all weights
         # If net score is positive, it suggests prices are rising -> BUY NOW
@@ -539,3 +581,102 @@ class GraphRAGEngine:
             f"RISK_IF_OPPOSITE: {risk}"
         )
         return fallback_explanation
+
+    def _compute_tfidf_and_cosine_similarity(self, query: str, nodes: list[dict], top_k: int = 5, threshold: float = 0.05) -> list[dict]:
+        """
+        Pure Python TF-IDF and Cosine Similarity to find nodes semantically matching a query.
+        """
+        import math
+        from collections import Counter
+
+        # Tokenize function
+        def tokenize(text: str) -> list[str]:
+            return re.findall(r'\w+', text.lower())
+
+        # Get documents
+        documents = []
+        for node in nodes:
+            # Combine properties and ID to form document text
+            props = json.loads(node["properties_json"])
+            props_text = " ".join([str(v) for v in props.values()])
+            doc_text = f"{node['node_id']} {node['node_type']} {props_text}"
+            documents.append((node, tokenize(doc_text)))
+
+        query_tokens = tokenize(query)
+        if not query_tokens:
+            return []
+
+        # Compute IDF
+        num_docs = len(documents)
+        dfs = Counter()
+        for _, tokens in documents:
+            unique_tokens = set(tokens)
+            for token in unique_tokens:
+                dfs[token] += 1
+
+        idfs = {}
+        for token, df in dfs.items():
+            idfs[token] = math.log((1 + num_docs) / (1 + df)) + 1
+
+        # TF-IDF of query
+        query_tf = Counter(query_tokens)
+        query_tfidf = {}
+        query_norm = 0.0
+        for token, count in query_tf.items():
+            if token in idfs:
+                tfidf = count * idfs[token]
+                query_tfidf[token] = tfidf
+                query_norm += tfidf ** 2
+        query_norm = math.sqrt(query_norm)
+
+        if query_norm == 0.0:
+            return []
+
+        # TF-IDF and similarity for each document
+        results = []
+        for node, tokens in documents:
+            doc_tf = Counter(tokens)
+            doc_tfidf = {}
+            doc_norm = 0.0
+            for token, count in doc_tf.items():
+                if token in idfs:
+                    tfidf = count * idfs[token]
+                    doc_tfidf[token] = tfidf
+                    doc_norm += tfidf ** 2
+            doc_norm = math.sqrt(doc_norm)
+
+            if doc_norm == 0.0:
+                continue
+
+            # Dot product
+            dot_product = 0.0
+            for token in query_tfidf:
+                if token in doc_tfidf:
+                    dot_product += query_tfidf[token] * doc_tfidf[token]
+
+            similarity = dot_product / (query_norm * doc_norm)
+            if similarity >= threshold:
+                results.append((node, similarity))
+
+        # Sort and return top K
+        results.sort(key=lambda x: x[1], reverse=True)
+        return [{"node": item[0], "similarity": item[1]} for item in results[:top_k]]
+
+    async def search_nodes_semantically(self, query: str, top_k: int = 5, threshold: float = 0.05) -> list[dict]:
+        """
+        Retrieves nodes semantically matching a query using TF-IDF and cosine similarity.
+        """
+        try:
+            async with aiosqlite.connect(self.db_path) as conn:
+                conn.row_factory = aiosqlite.Row
+                async with conn.execute("SELECT node_id, node_type, properties_json FROM graph_nodes") as cursor:
+                    rows = await cursor.fetchall()
+                    nodes = [dict(row) for row in rows]
+
+            if not nodes:
+                return []
+
+            return self._compute_tfidf_and_cosine_similarity(query, nodes, top_k, threshold)
+        except Exception as e:
+            logger.error(f"Semantic node search failed: {e}")
+            return []

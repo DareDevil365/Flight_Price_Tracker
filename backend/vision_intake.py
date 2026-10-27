@@ -23,7 +23,8 @@ class VisionIntake:
         import json
         try:
             client, model, _ = api_key_manager.get_client("brute")
-            prompt = '''
+            prompt = f'''
+            Today is {__import__('datetime').date.today().isoformat()}.
             Extract flight search parameters from the provided image.
 
             Return a JSON object with these exact keys:
@@ -36,7 +37,7 @@ class VisionIntake:
             - specificFlightNumber (string or null, e.g. "6E-2341")
 
             If any parameter is missing, use reasonable defaults:
-            - departureDate: 2026-06-28 (1 week from today)
+            - departureDate: null (ask the user to enter a missing date)
             - cabinClass: "ECONOMY"
             - passengerCount: 1
 
@@ -80,16 +81,4 @@ class VisionIntake:
             return self._mock_extraction_fallback()
 
     def _mock_extraction_fallback(self) -> dict:
-        """Fallback mock result representing standard extracted travel information."""
-        # Simulated extraction from a screenshot of a Delhi to Mumbai flight
-        return {
-            "origin": {"code": "DEL", "name": "New Delhi"},
-            "destination": {"code": "BOM", "name": "Mumbai"},
-            "departureDate": "2026-07-15",
-            "returnDate": None,
-            "passengerCount": 1,
-            "cabinClass": "ECONOMY",
-            "specificFlightNumber": "6E-2341",
-            "success": True,
-            "message": "Trip details successfully extracted from screenshot (Mock Fallback)"
-        }
+        return {'success':False,'message':'Could not extract this screenshot. Enter the trip manually or configure a vision-capable API.'}

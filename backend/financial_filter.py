@@ -8,78 +8,37 @@ from loguru import logger
 
 
 class FinancialFilter:
-    def passes(self, coupon: dict, rules: dict) -> tuple[bool, str]:
-        """
-        Check if a coupon passes the user's financial rules.
-        Returns (passes: bool, reason: str).
-        """
-        # EMI check
-        if coupon.get("requires_emi") and not rules.get("allow_emi", False):
-            return False, "Requires EMI (blocked by user)"
+    def assess(self, coupon, rules):
+        from offer_rules import Decision, evaluate_offer
+        if rules.get('is_domestic') is not None:
+            from compiler import is_international_only_coupon,is_domestic_only_coupon,is_flight_coupon
+            code,desc=coupon.get('code',''),coupon.get('description') or ''
+            if not is_flight_coupon(code,desc):
+                return Decision('ineligible',['This is not a flight offer'])
+            intl=is_international_only_coupon(code,desc)
+            domestic=is_domestic_only_coupon(code,desc)
+            if (rules['is_domestic'] and intl and not domestic) or (not rules['is_domestic'] and domestic and not intl):
+                return Decision('ineligible',['Offer route scope differs from this trip'])
+        if not coupon.get('description'):
+            for flag,allow,label in [('requires_emi','allow_emi','EMI'),('requires_bnpl','allow_bnpl','BNPL')]:
+                if coupon.get(flag) and not rules.get(allow,False):
+                    return Decision('ineligible',[label+' blocked by user'])
+            if coupon.get('requires_wallet') and not rules.get('allow_wallet_offers',True):
+                return Decision('ineligible',['Wallet payment blocked by user'])
+        return evaluate_offer(coupon,rules)
 
-        # BNPL check
-        if coupon.get("requires_bnpl") and not rules.get("allow_bnpl", False):
-            return False, "Requires BNPL (blocked by user)"
+    def passes(self, coupon, rules):
+        decision=self.assess(coupon,rules)
+        # Conditional deals are visible before payment, but cannot prove savings.
+        passes=decision.status=='eligible' or (decision.status=='unknown' and rules.get('selected_payment') is None)
+        return passes, ('Conditional: ' if decision.status=='unknown' else '')+'; '.join(decision.reasons)
 
-        # Wallet check
-        if coupon.get("requires_wallet") and not rules.get("allow_wallet_offers", True):
-            return False, "Requires wallet payment (blocked by user)"
-
-        # App-only check
-        if coupon.get("app_only") and not rules.get("allow_app_only", False):
-            return False, "App-only offer (blocked by user)"
-
-        # Bank blacklist check
-        bank = coupon.get("bank_restriction")
-        blacklisted = rules.get("blacklisted_banks", [])
-        if bank and blacklisted:
-            if bank.upper() in [b.upper() for b in blacklisted]:
-                return False, f"Bank {bank} is blacklisted"
-
-        # Bank whitelist check
-        whitelisted = rules.get("whitelisted_banks", [])
-        if bank and whitelisted:
-            if bank.upper() not in [b.upper() for b in whitelisted]:
-                return False, f"Bank {bank} not in whitelist"
-
-        # Card type check
-        card_type = coupon.get("card_type", "ANY")
-        allowed_types = rules.get("allowed_card_types", [])
-        if card_type != "ANY" and allowed_types:
-            if card_type not in allowed_types:
-                return False, f"Card type {card_type} not allowed"
-
-        return True, "Passed all filters"
-
-    def contains_violation(self, restriction_text: str, rules: dict) -> bool:
-        """
-        Check if restriction text from the DOM contains a financial violation.
-        This catches cases where the coupon was accepted by the site but
-        requires a bank/method the user has blocked.
-        """
+    def contains_violation(self, restriction_text, rules):
         if not restriction_text:
             return False
-
-        text_upper = restriction_text.upper()
-
-        # Check blacklisted banks mentioned in restriction text
-        for bank in rules.get("blacklisted_banks", []):
-            if bank.upper() in text_upper:
-                return True
-
-        # Check for EMI requirement
-        if not rules.get("allow_emi", False):
-            emi_keywords = ["EMI", "EQUATED MONTHLY", "INSTALLMENT"]
-            if any(kw in text_upper for kw in emi_keywords):
-                return True
-
-        # Check for BNPL requirement
-        if not rules.get("allow_bnpl", False):
-            bnpl_keywords = ["BUY NOW PAY LATER", "BNPL", "PAY LATER", "SIMPL", "LAZYPAY"]
-            if any(kw in text_upper for kw in bnpl_keywords):
-                return True
-
-        return False
+        from offer_parser import published_offer
+        offer=published_offer('verification','TERMS',restriction_text,'')
+        return bool(offer and not self.passes(offer,rules)[0])
 
     def filter_coupons(self, coupons: list[dict], rules: dict) -> tuple[list[dict], list[dict]]:
         """
@@ -94,8 +53,7 @@ class FinancialFilter:
             if ok:
                 passed.append(coupon)
             else:
-                coupon["filter_reason"] = reason
-                filtered.append(coupon)
+                filtered.append({**coupon,'filter_reason':reason})
 
         logger.info(
             f"Financial filter: {len(passed)} passed, {len(filtered)} filtered "

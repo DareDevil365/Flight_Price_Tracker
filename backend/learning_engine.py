@@ -531,112 +531,60 @@ class SelfLearningEngine:
     # ──────────────────────────────────────────────────────
 
     async def get_dashboard_data(self) -> dict:
-        """Compile learning metrics for the frontend dashboard."""
+        """Describe active audit facts; legacy research is not live accuracy.
+
+        Coupon success belongs to a recorded booking/payment, never a global
+        trust score. Forecast validation is gated per exact trip in intelligence;
+        pooling inactive predictor rows would invent system-wide certainty.
+        """
+        from datetime import timezone
         conn = self.db.db
-        data = {
-            "cycle_count": self.cycle_count,
-            "coupon_stats": {},
-            "pipeline_health": {},
-            "prediction_accuracy": {},
-            "suggestion_stats": {},
-            "recent_journal": [],
-            "improvements_count": 0
-        }
-        
+        current = datetime.now(timezone.utc)
+        data = dict(data_source='active_audits', observed_at=current.isoformat(),
+            cycle_count=None, improvements_count=None, provider_run_count=None,
+            coupon_stats=dict(available=False, run_count=None, trial_count=None,
+                run_statuses={}, trial_statuses={}, review_accepted_trials=None,
+                checkout_accepted_trials=None, total_tracked=None, dead_coupons=None,
+                avg_success_rate=None, avg_trust_score=None,
+                scope_note='Trials are scoped to the recorded flight, date, terms and payment. Review acceptance does not verify final fees.'),
+            pipeline_health={}, prediction_accuracy=dict(available=False,
+                total_audited=None, avg_mape=None, status='PER_TRIP_VALIDATION_REQUIRED',
+                reason='Accuracy and certainty are evaluated for each exact directed route, departure date, adult count, cabin and constraints. Open Price history & booking advice to inspect its evidence gate.'),
+            suggestion_stats={}, suggestion_tracking_available=False,
+            recent_journal=[], journal_scope='legacy_research_inactive', errors=[])
         try:
-            # Coupon stats
-            async with conn.execute("""
-                SELECT COUNT(*), SUM(is_dead), AVG(success_rate), AVG(computed_trust_score)
-                FROM coupon_learnings
-            """) as cursor:
-                row = await cursor.fetchone()
-                if row:
-                    data["coupon_stats"] = {
-                        "total_tracked": row[0] or 0,
-                        "dead_coupons": row[1] or 0,
-                        "avg_success_rate": round(row[2] or 0, 3),
-                        "avg_trust_score": round(row[3] or 0.5, 3)
-                    }
+            async with conn.execute('SELECT status,COUNT(*) FROM coupon_audit_runs GROUP BY status') as cursor:
+                run_statuses = {r[0]:r[1] for r in await cursor.fetchall()}
+            async with conn.execute('''SELECT t.status,COUNT(*) FROM coupon_audit_trials t
+                JOIN coupon_audit_runs r ON r.id=t.run_id GROUP BY t.status''') as cursor:
+                trial_statuses = {r[0]:r[1] for r in await cursor.fetchall()}
+            async with conn.execute('''SELECT
+                SUM(CASE WHEN t.status='valid_match' AND r.status='review_only' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN t.status='valid_match' AND r.status='checkout_verified' THEN 1 ELSE 0 END)
+                FROM coupon_audit_trials t JOIN coupon_audit_runs r ON r.id=t.run_id''') as cursor:
+                accepted = await cursor.fetchone()
+            data['coupon_stats'].update(available=True,run_count=sum(run_statuses.values()),
+                trial_count=sum(trial_statuses.values()),run_statuses=run_statuses,trial_statuses=trial_statuses,
+                review_accepted_trials=accepted[0] or 0,checkout_accepted_trials=accepted[1] or 0)
         except Exception:
-            pass
-        
+            data['errors'].append('Active coupon audit statistics unavailable; no success rate was assumed.')
         try:
-            # Pipeline health (last 7 days)
-            seven_days_ago = (datetime.now() - timedelta(days=7)).isoformat()
-            async with conn.execute("""
-                SELECT platform, 
-                       COUNT(*) as total,
-                       SUM(CASE WHEN outcome = 'SUCCESS' THEN 1 ELSE 0 END) as successes,
-                       AVG(latency_ms) as avg_latency
-                FROM pipeline_metrics
-                WHERE recorded_at >= ? AND phase = 'overall'
-                GROUP BY platform
-            """, (seven_days_ago,)) as cursor:
+            async with conn.execute('''SELECT platform,COUNT(*),
+                SUM(CASE WHEN status='success' THEN 1 ELSE 0 END)
+                FROM provider_runs WHERE datetime(observed_at)>=datetime(?)
+                AND datetime(observed_at)<=datetime(?) GROUP BY platform''',
+                ((current-timedelta(days=7)).isoformat(),current.isoformat())) as cursor:
                 rows = await cursor.fetchall()
-                for row in rows:
-                    data["pipeline_health"][row[0]] = {
-                        "total": row[1],
-                        "successes": row[2],
-                        "success_rate": round(row[2] / row[1], 3) if row[1] > 0 else 0,
-                        "avg_latency_ms": int(row[3] or 0)
-                    }
+            data['pipeline_health']={r[0]:dict(total=r[1],successes=r[2],
+                success_rate=round(r[2]/r[1],3),avg_latency_ms=None,
+                scope='Recorded listing retrieval outcomes during the last 7 days; not checkout or price accuracy.') for r in rows}
+            data['provider_run_count']=sum(r[1] for r in rows)
         except Exception:
-            pass
-        
+            data['errors'].append('Active provider outcomes unavailable; no reliability rate was assumed.')
         try:
-            # Prediction accuracy summary
-            async with conn.execute("""
-                SELECT COUNT(*), AVG(prediction_error)
-                FROM prediction_queries WHERE audited = 1
-            """) as cursor:
-                row = await cursor.fetchone()
-                if row:
-                    data["prediction_accuracy"] = {
-                        "total_audited": row[0] or 0,
-                        "avg_mape": round(row[1] or 0, 4)
-                    }
+            async with conn.execute('''SELECT category,action,reason,recorded_at
+                FROM process_journal ORDER BY recorded_at DESC LIMIT 20''') as cursor:
+                data['recent_journal']=[dict(category=r[0],action=r[1],reason=r[2],timestamp=r[3]) for r in await cursor.fetchall()]
         except Exception:
-            pass
-        
-        try:
-            # Suggestion stats
-            async with conn.execute("""
-                SELECT suggestion_type, COUNT(*), 
-                       SUM(was_clicked), SUM(was_accepted)
-                FROM suggestion_tracking
-                GROUP BY suggestion_type
-            """) as cursor:
-                rows = await cursor.fetchall()
-                for row in rows:
-                    data["suggestion_stats"][row[0]] = {
-                        "shown": row[1] or 0,
-                        "clicked": row[2] or 0,
-                        "accepted": row[3] or 0
-                    }
-        except Exception:
-            pass
-        
-        try:
-            # Recent journal entries
-            async with conn.execute("""
-                SELECT category, action, reason, recorded_at
-                FROM process_journal
-                ORDER BY recorded_at DESC LIMIT 20
-            """) as cursor:
-                rows = await cursor.fetchall()
-                data["recent_journal"] = [
-                    {"category": r[0], "action": r[1], "reason": r[2], "timestamp": r[3]}
-                    for r in rows
-                ]
-        except Exception:
-            pass
-        
-        try:
-            # Total improvements count
-            async with conn.execute("SELECT COUNT(*) FROM process_journal") as cursor:
-                row = await cursor.fetchone()
-                data["improvements_count"] = row[0] or 0
-        except Exception:
-            pass
-        
+            data['errors'].append('Legacy research journal unavailable.')
         return data

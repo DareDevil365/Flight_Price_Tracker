@@ -379,155 +379,11 @@ class AIWorker(BaseWorker):
         Return strictly a JSON array of objects. No markdown backticks, no wrapping in ```json, and no other text.
         """
 
-        client, model, key_str = api_key_manager.get_client("brute")
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are a professional browser automation helper with vision capabilities. Output strictly valid JSON arrays."},
-                {"role": "user", "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {
-                        "url": f"data:image/png;base64,{image_b64}"
-                    }}
-                ]}
-            ],
-            temperature=0.0
-        )
-        res_text = response.choices[0].message.content.strip()
-        clean_res = res_text.replace("```json", "").replace("```", "").strip()
-        flights = json.loads(clean_res)
-        
-        for f in flights:
-            f["base_price"] = float(f.get("base_price", 5000))
-            if "selector" not in f:
-                f["selector"] = "button"
-        return flights
-
-    async def _input_generic_ai(self, page, origin: str, dest: str, date_str: str) -> None:
-        screenshot_bytes = await page.screenshot(type="png")
-        image_b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
-        
-        elements = await page.evaluate(self._js_element_extractor())
-        elements_summary = []
-        for idx, el in enumerate(elements):
-            elements_summary.append({
-                "idx": idx,
-                "tag": el["tag"],
-                "placeholder": el["placeholder"],
-                "text": el["text"],
-                "selector": el["selector"]
-            })
-            
-        prompt = f"""
-        Analyze the screenshot of the travel site homepage and the list of elements below.
-        Identify the CSS selectors needed to:
-        1. Input the origin airport (e.g. from city, origin input).
-        2. Input the destination airport (e.g. to city, destination input).
-        3. Input the departure date.
-        4. Click the search button.
-        
-        Interactive elements list:
-        {json.dumps(elements_summary[:100], indent=2)}
-        
-        Return a JSON object containing:
-        - "origin_selector": CSS selector for origin input
-        - "destination_selector": CSS selector for destination input
-        - "date_selector": CSS selector for departure date input
-        - "search_selector": CSS selector for search button
-        
-        Return strictly a JSON object with these keys. No markdown backticks, no wrapping in ```json, and no other text.
-        """
-        
-        client, model, key_str = api_key_manager.get_client("brute")
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are a web automation assistant. Output strictly valid JSON."},
-                {"role": "user", "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {
-                        "url": f"data:image/png;base64,{image_b64}"
-                    }}
-                ]}
-            ],
-            temperature=0.0
-        )
-        res_text = response.choices[0].message.content.strip()
-        clean_res = res_text.replace("```json", "").replace("```", "").strip()
-        result = json.loads(clean_res)
-        
-        orig_sel = result.get("origin_selector")
-        if orig_sel:
-            await page.click(orig_sel)
-            await asyncio.sleep(0.5)
-            await page.keyboard.type(origin)
-            await asyncio.sleep(1.0)
-            await page.keyboard.press("Enter")
-            await asyncio.sleep(0.5)
-            
-        dest_sel = result.get("destination_selector")
-        if dest_sel:
-            await page.click(dest_sel)
-            await asyncio.sleep(0.5)
-            await page.keyboard.type(dest)
-            await asyncio.sleep(1.0)
-            await page.keyboard.press("Enter")
-            await asyncio.sleep(0.5)
-            
-        date_sel = result.get("date_selector")
-        if date_sel:
-            try:
-                dt = datetime.strptime(date_str, "%Y-%m-%d")
-                formatted_date = dt.strftime("%d/%m/%Y")
-            except Exception:
-                formatted_date = date_str
-            await page.evaluate(f"""
-                () => {{
-                    const el = document.querySelector('{date_sel}');
-                    if (el) {{
-                        el.value = '{formatted_date}';
-                        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                    }}
-                }}
-            """)
-            await asyncio.sleep(0.5)
-
-    async def _click_element_via_ai(self, page, element_description: str) -> bool:
-        try:
-            screenshot_bytes = await page.screenshot(type="png")
-            image_b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
-            
-            elements = await page.evaluate(self._js_element_extractor())
-            elements_summary = []
-            for idx, el in enumerate(elements):
-                elements_summary.append({
-                    "idx": idx,
-                    "tag": el["tag"],
-                    "placeholder": el["placeholder"],
-                    "text": el["text"],
-                    "selector": el["selector"]
-                })
-                
-            prompt = f"""
-            Analyze the screenshot of the webpage and the list of elements below.
-            We want to click the element described as: '{element_description}'.
-            
-            Interactive elements list:
-            {json.dumps(elements_summary[:100], indent=2)}
-            
-            Identify which element from the list best matches our target. 
-            Return a JSON object containing:
-            - "selector": the CSS selector of the chosen element (from the list)
-            - "confidence": value between 0.0 and 1.0
-            
-            Return strictly a JSON object with these keys. No markdown backticks, no wrapping in ```json, and no other text.
-            """
-            
-            client, model, key_str = api_key_manager.get_client("brute")
+        async def make_call(client, model):
             response = await client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": "You are a web automation assistant. Output strictly valid JSON."},
+                    {"role": "system", "content": "You are a professional browser automation helper with vision capabilities. Output strictly valid JSON arrays."},
                     {"role": "user", "content": [
                         {"type": "text", "text": prompt},
                         {"type": "image_url", "image_url": {
@@ -539,17 +395,305 @@ class AIWorker(BaseWorker):
             )
             res_text = response.choices[0].message.content.strip()
             clean_res = res_text.replace("```json", "").replace("```", "").strip()
-            result = json.loads(clean_res)
+            return json.loads(clean_res)
+
+        flights = await api_key_manager.execute_with_retry("brute", make_call)
+        
+        for f in flights:
+            f["base_price"] = float(f.get("base_price", 5000))
+            if "selector" not in f:
+                f["selector"] = None
+        return flights
+
+    async def _input_generic_ai(self, page, origin: str, dest: str, date_str: str) -> None:
+        try:
+            # 1. Inject Floating Badges
+            elements = await page.evaluate(self._js_badge_injector())
             
-            selector = result.get("selector")
-            if selector:
-                logger.info(f"[AIWorker] AI selected CSS selector to click: {selector}")
+            # 2. Take Screenshot showing the Badges
+            screenshot_bytes = await page.screenshot(type="png")
+            image_b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+            
+            # 3. Clean up the badges immediately from DOM
+            await page.evaluate(self._js_badge_cleaner())
+
+            elements_summary = []
+            for idx, el in enumerate(elements):
+                elements_summary.append({
+                    "idx": el["idx"],
+                    "tag": el["tag"],
+                    "placeholder": el["placeholder"],
+                    "text": el["text"]
+                })
+
+            prompt = f"""
+            Analyze the screenshot of the travel site homepage. Magenta floating number badges like `[0]`, `[1]`, etc. are overlaid on all interactive elements.
+            Identify the badge indices needed to:
+            1. Input the origin airport (e.g. from city, origin input).
+            2. Input the destination airport (e.g. to city, destination input).
+            3. Input the departure date.
+            4. Click the search button.
+            
+            Interactive elements list:
+            {json.dumps(elements_summary[:150], indent=2)}
+
+            Return a JSON object containing:
+            - "origin_idx": integer index for origin input
+            - "destination_idx": integer index for destination input
+            - "date_idx": integer index for departure date input
+            - "search_idx": integer index for search button
+
+            If any index cannot be found, set its value to null.
+            Return strictly a JSON object. No markdown backticks, no wrapping in ```json, and no other text.
+            """
+
+            async def make_call(client, model):
+                response = await client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": "You are a web automation assistant. Output strictly valid JSON."},
+                        {"role": "user", "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {
+                                "url": f"data:image/png;base64,{image_b64}"
+                            }}
+                        ]}
+                    ],
+                    temperature=0.0
+                )
+                res_text = response.choices[0].message.content.strip()
+                clean_res = res_text.replace("```json", "").replace("```", "").strip()
+                return json.loads(clean_res)
+
+            result = await api_key_manager.execute_with_retry("brute", make_call)
+
+            orig_idx = result.get("origin_idx")
+            if orig_idx is not None and 0 <= orig_idx < len(elements):
+                orig_sel = elements[orig_idx]["selector"]
+                await page.click(orig_sel)
+                await asyncio.sleep(0.5)
+                await page.keyboard.type(origin)
+                await asyncio.sleep(1.0)
+                await page.keyboard.press("Enter")
+                await asyncio.sleep(0.5)
+
+            dest_idx = result.get("destination_idx")
+            if dest_idx is not None and 0 <= dest_idx < len(elements):
+                dest_sel = elements[dest_idx]["selector"]
+                await page.click(dest_sel)
+                await asyncio.sleep(0.5)
+                await page.keyboard.type(dest)
+                await asyncio.sleep(1.0)
+                await page.keyboard.press("Enter")
+                await asyncio.sleep(0.5)
+
+            date_idx = result.get("date_idx")
+            if date_idx is not None and 0 <= date_idx < len(elements):
+                date_sel = elements[date_idx]["selector"]
+                try:
+                    dt = datetime.strptime(date_str, "%Y-%m-%d")
+                    formatted_date = dt.strftime("%d/%m/%Y")
+                except Exception:
+                    formatted_date = date_str
+                await page.evaluate(f"""
+                    () => {{
+                        const el = document.querySelector('{date_sel}');
+                        if (el) {{
+                            el.value = '{formatted_date}';
+                            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        }}
+                    }}
+                """)
+                await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.error(f"[AIWorker] Generic AI input failed: {e}")
+
+    async def _click_element_via_ai(self, page, element_description: str) -> bool:
+        try:
+            # 1. Inject Floating Badges
+            elements = await page.evaluate(self._js_badge_injector())
+
+            # 2. Take Screenshot showing the Badges
+            screenshot_bytes = await page.screenshot(type="png")
+            image_b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+            
+            # 3. Clean up the badges immediately from DOM
+            await page.evaluate(self._js_badge_cleaner())
+
+            elements_summary = []
+            for idx, el in enumerate(elements):
+                elements_summary.append({
+                    "idx": el["idx"],
+                    "tag": el["tag"],
+                    "placeholder": el["placeholder"],
+                    "text": el["text"]
+                })
+                
+            prompt = f"""
+            Analyze the screenshot of the webpage. Magenta floating number badges like `[0]`, `[1]`, etc. are overlaid on all interactive elements.
+            We want to click the element described as: '{element_description}'.
+            
+            Interactive elements list:
+            {json.dumps(elements_summary[:150], indent=2)}
+            
+            Identify which element index best matches our target.
+            Return strictly a JSON object containing:
+            - "idx": the integer index of the chosen element
+            - "confidence": value between 0.0 and 1.0
+            
+            Return strictly a JSON object. No markdown backticks, no wrapping in ```json, and no other text.
+            """
+            
+            async def make_call(client, model):
+                response = await client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": "You are a web automation assistant. Output strictly valid JSON."},
+                        {"role": "user", "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {
+                                "url": f"data:image/png;base64,{image_b64}"
+                            }}
+                        ]}
+                    ],
+                    temperature=0.0
+                )
+                res_text = response.choices[0].message.content.strip()
+                clean_res = res_text.replace("```json", "").replace("```", "").strip()
+                return json.loads(clean_res)
+
+            result = await api_key_manager.execute_with_retry("brute", make_call)
+            
+            chosen_idx = result.get("idx")
+            if chosen_idx is not None and 0 <= chosen_idx < len(elements):
+                selector = elements[chosen_idx]["selector"]
+                logger.info(f"[AIWorker] AI selected element [{chosen_idx}] with CSS selector: {selector}")
                 await page.click(selector)
                 await asyncio.sleep(1.0)
                 return True
         except Exception as e:
             logger.error(f"[AIWorker] AI element click failed: {e}")
         return False
+
+    def _js_badge_injector(self) -> str:
+        return """
+        () => {
+            const oldContainer = document.getElementById('ai-nav-overlay-container');
+            if (oldContainer) oldContainer.remove();
+
+            const container = document.createElement('div');
+            container.id = 'ai-nav-overlay-container';
+            container.style.position = 'absolute';
+            container.style.top = '0';
+            container.style.left = '0';
+            container.style.width = '100%';
+            container.style.height = '100%';
+            container.style.pointerEvents = 'none';
+            container.style.zIndex = '9999999';
+            document.body.appendChild(container);
+
+            const elements = [];
+
+            function getUniqueSelector(el) {
+                if (el.id) return '#' + el.id;
+                let path = [];
+                while (el && el.nodeType === Node.ELEMENT_NODE) {
+                    let selector = el.nodeName.toLowerCase();
+                    if (el.className) {
+                        const classes = Array.from(el.classList).filter(c => !c.includes(':')).join('.');
+                        if (classes) selector += '.' + classes;
+                    }
+                    let sib = el, sibCount = 0, sibIndex = 0;
+                    while (sib = sib.previousSibling) {
+                        if (sib.nodeType === Node.ELEMENT_NODE && sib.nodeName === el.nodeName) {
+                            sibIndex++;
+                        }
+                    }
+                    sib = el;
+                    while (sib = sib.nextSibling) {
+                        if (sib.nodeType === Node.ELEMENT_NODE && sib.nodeName === el.nodeName) {
+                            sibCount++;
+                        }
+                    }
+                    if (sibIndex > 0 || sibCount > 0) {
+                        selector += `:nth-of-type(${sibIndex + 1})`;
+                    }
+                    path.unshift(selector);
+                    el = el.parentNode;
+                }
+                return path.join(' > ');
+            }
+
+            const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, {
+                acceptNode: (node) => {
+                    const tag = node.tagName.toLowerCase();
+                    if (['input', 'button', 'select', 'textarea', 'a'].includes(tag)) {
+                        return NodeFilter.FILTER_ACCEPT;
+                    }
+                    if (node.onclick || node.getAttribute('role') === 'button' || node.getAttribute('contenteditable') === 'true') {
+                        return NodeFilter.FILTER_ACCEPT;
+                    }
+                    const className = node.className || '';
+                    if (typeof className === 'string') {
+                        const lowerClass = className.toLowerCase();
+                        if (lowerClass.includes('btn') || lowerClass.includes('button') || lowerClass.includes('book') || lowerClass.includes('select')) {
+                            return NodeFilter.FILTER_ACCEPT;
+                        }
+                    }
+                    try {
+                        if (window.getComputedStyle(node).cursor === 'pointer') {
+                            return NodeFilter.FILTER_ACCEPT;
+                        }
+                    } catch(e) {}
+                    return NodeFilter.FILTER_SKIP;
+                }
+            });
+
+            let node;
+            let idx = 0;
+            while (node = walk.nextNode()) {
+                const rect = node.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.left >= 0 && rect.top < window.innerHeight && rect.left < window.innerWidth) {
+                    const badge = document.createElement('div');
+                    badge.innerText = `[${idx}]`;
+                    badge.style.position = 'absolute';
+                    badge.style.left = `${rect.left + window.scrollX}px`;
+                    badge.style.top = `${rect.top + window.scrollY}px`;
+                    badge.style.backgroundColor = '#ff007f';
+                    badge.style.color = '#ffffff';
+                    badge.style.border = '1px solid #000000';
+                    badge.style.fontFamily = 'monospace';
+                    badge.style.fontSize = '10px';
+                    badge.style.fontWeight = 'bold';
+                    badge.style.padding = '2px 4px';
+                    badge.style.zIndex = '99999999';
+                    badge.style.pointerEvents = 'none';
+                    badge.style.borderRadius = '3px';
+                    badge.style.lineHeight = '1';
+                    badge.style.boxShadow = '0 2px 4px rgba(0,0,0,0.5)';
+                    container.appendChild(badge);
+
+                    elements.push({
+                        idx: idx,
+                        tag: node.tagName.toLowerCase(),
+                        placeholder: node.placeholder || '',
+                        text: (node.innerText || node.value || '').substring(0, 50).trim(),
+                        selector: getUniqueSelector(node)
+                    });
+                    idx++;
+                }
+            }
+            return elements;
+        }
+        """
+
+    def _js_badge_cleaner(self) -> str:
+        return """
+        () => {
+            const container = document.getElementById('ai-nav-overlay-container');
+            if (container) container.remove();
+        }
+        """
 
     def _js_element_extractor(self) -> str:
         return """
@@ -629,28 +773,36 @@ class AIWorker(BaseWorker):
 
     # ── Passenger/Checkout No-Op methods ──
     async def select_flight(self, page, flight: dict) -> None:
-        selector = flight.get("selector")
-        if selector:
-            logger.info(f"[AIWorker] Selecting flight using selector: {selector}")
-            await page.click(selector)
-            await asyncio.sleep(2.0)
+        await super().select_flight(page, flight)
+
 
     async def fill_passenger_details(self, page) -> None:
-        pass
+        logger.info("[AIWorker] Filling passenger details semantically...")
+        await self.fill_input_semantically(page, "first name", "Raj")
+        await asyncio.sleep(0.3)
+        await self.fill_input_semantically(page, "last name", "Kumar")
+        await asyncio.sleep(0.3)
+        await self.fill_input_semantically(page, "email", "raj.kumar@example.com")
+        await asyncio.sleep(0.5)
+        await self.click_button_semantically(page, "continue")
 
     async def skip_addons(self, page) -> None:
-        pass
+        logger.info("[AIWorker] Skipping addons semantically...")
+        await self.click_button_semantically(page, "skip")
 
     async def proceed_to_checkout(self, page) -> None:
-        pass
+        logger.info("[AIWorker] Proceeding to checkout semantically...")
+        await self.click_button_semantically(page, "continue")
 
     async def is_at_checkout(self, page) -> bool:
-        return True
+        return await super().is_at_checkout(page)
+
 
 
 
     async def detect_captcha(self, page) -> bool:
-        return False
+        return await super().detect_captcha(page)
+
 
     async def health_check(self, page) -> bool:
         return True

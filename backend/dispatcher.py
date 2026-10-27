@@ -114,6 +114,7 @@ class Dispatcher:
                     })
             
             task["date_alternatives"] = date_alternatives
+            task["target_price"] = target_price
             # Emit date alternatives to frontend
             self.emit_ws("search:date_alternatives", {
                 "searchId": search_id,
@@ -151,25 +152,73 @@ class Dispatcher:
 
         # Spawn tasks for target date
         async_tasks = []
-        for worker in workers:
-            t = asyncio.create_task(
-                self._run_worker_with_semaphore(semaphore, worker, task)
-            )
-            async_tasks.append(t)
-            
-        # Spawn tasks for best date (if different)
-        if best_date != task["trip"]["departure_date"]:
-            best_date_task = task.copy()
-            best_date_task["trip"] = task["trip"].copy()
-            best_date_task["trip"]["departure_date"] = best_date
+        is_round_trip = task["trip"].get("trip_type") == "round_trip"
+
+        if is_round_trip:
+            # Outbound Leg
+            outbound_task = task.copy()
+            outbound_task["trip"] = task["trip"].copy()
+            outbound_task["trip"]["trip_type"] = "one_way"
+            outbound_task["direction"] = "outbound"
             
             for worker in workers:
-                best_date_worker = self._create_worker(worker.platform_id, db_platforms)
-                if best_date_worker:
+                t = asyncio.create_task(
+                    self._run_worker_with_semaphore(semaphore, worker, outbound_task)
+                )
+                async_tasks.append(t)
+
+            # Inbound Leg
+            inbound_task = task.copy()
+            inbound_task["trip"] = task["trip"].copy()
+            inbound_task["trip"]["origin"] = task["trip"]["destination"]
+            inbound_task["trip"]["destination"] = task["trip"]["origin"]
+            inbound_task["trip"]["departure_date"] = task["trip"]["return_date"]
+            inbound_task["trip"]["return_date"] = None
+            inbound_task["trip"]["trip_type"] = "one_way"
+            inbound_task["direction"] = "inbound"
+
+            for worker in workers:
+                inbound_worker = self._create_worker(worker.platform_id, db_platforms)
+                if inbound_worker:
                     t = asyncio.create_task(
-                        self._run_worker_with_semaphore(semaphore, best_date_worker, best_date_task)
+                        self._run_worker_with_semaphore(semaphore, inbound_worker, inbound_task)
                     )
                     async_tasks.append(t)
+        else:
+            for worker in workers:
+                t = asyncio.create_task(
+                    self._run_worker_with_semaphore(semaphore, worker, task)
+                )
+                async_tasks.append(t)
+
+        # Spawn tasks for best date (if different)
+        if best_date != task["trip"]["departure_date"]:
+            if is_round_trip:
+                best_outbound = task.copy()
+                best_outbound["trip"] = task["trip"].copy()
+                best_outbound["trip"]["departure_date"] = best_date
+                best_outbound["trip"]["trip_type"] = "one_way"
+                best_outbound["direction"] = "outbound"
+
+                for worker in workers:
+                    best_worker = self._create_worker(worker.platform_id, db_platforms)
+                    if best_worker:
+                        t = asyncio.create_task(
+                            self._run_worker_with_semaphore(semaphore, best_worker, best_outbound)
+                        )
+                        async_tasks.append(t)
+            else:
+                best_date_task = task.copy()
+                best_date_task["trip"] = task["trip"].copy()
+                best_date_task["trip"]["departure_date"] = best_date
+
+                for worker in workers:
+                    best_date_worker = self._create_worker(worker.platform_id, db_platforms)
+                    if best_date_worker:
+                        t = asyncio.create_task(
+                            self._run_worker_with_semaphore(semaphore, best_date_worker, best_date_task)
+                        )
+                        async_tasks.append(t)
             
         self._active_searches[search_id] = async_tasks
         
@@ -313,8 +362,14 @@ class Dispatcher:
                                 platform="google_flights"
                             )
             finally:
-                await context.close()
-                await browser.close()
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+                try:
+                    await context.close()
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"[Dispatcher] Failed to scan nearby dates: {e}")
         finally:
@@ -434,6 +489,7 @@ class Dispatcher:
 
         # Register session in manager
         session_id = f"{search_id}_{platform}_{str(uuid.uuid4())[:8]}"
+        is_shared = (browser == self.browser_factory._shared_browser)
         await self.session_mgr.register_session(
             session_id=session_id,
             search_id=search_id,
@@ -441,7 +497,8 @@ class Dispatcher:
             browser=browser,
             context=context,
             page=page,
-            window_id=window_id
+            window_id=window_id,
+            is_shared_browser=is_shared
         )
 
         try:
@@ -503,8 +560,18 @@ class Dispatcher:
                 # ── BRUTE-FORCE PHASE ──
                 self.emit_ws("bot:status", {"searchId": search_id, "platform": platform, "phase": "testing_coupons", "progress": 70})
                 
-                # Load coupons from task schema
-                coupons = list(task.get("coupons_by_platform", {}).get(platform, []))
+                # Load coupons dynamically from database to pick up background-harvested coupons
+                coupons = []
+                if self.db:
+                    try:
+                        db_coupons = await self.db.get_coupons_for_platform(platform)
+                        coupons = [dict(c) for c in db_coupons]
+                    except Exception as e:
+                        logger.warning(f"Failed to query coupons dynamically from DB: {e}")
+
+                if not coupons:
+                    coupons = list(task.get("coupons_by_platform", {}).get(platform, []))
+
                 try:
                     onsite_coupons = await worker.scrape_onsite_coupons(page)
                     if onsite_coupons:
@@ -664,11 +731,15 @@ class Dispatcher:
                     )
                     
                     # Save final result to SQLite
+                    flight_num = f["flight_number"]
+                    if "direction" in task:
+                        flight_num = f"{flight_num} ({trip['origin']} ➔ {trip['destination']})"
+
                     result = {
                         "id": str(uuid.uuid4()),
                         "search_id": search_id,
                         "platform": platform,
-                        "flight_number": f["flight_number"],
+                        "flight_number": flight_num,
                         "airline": f["airline"],
                         "departure_time": f["departure_time"],
                         "arrival_time": f["arrival_time"],
@@ -739,8 +810,29 @@ class Dispatcher:
                 self.emit_ws("bot:status", {"searchId": search_id, "platform": platform, "phase": "aggregating", "progress": 70})
                 # Parse flights list
                 flights = await worker.parse_search_results(page)
-                if not flights:
-                    raise ValueError(f"No flights found on {worker.platform_name} matching search criteria.")
+
+                # Google Flights benchmark check to detect and discard bad scrapes (e.g. child fares, strike-throughs)
+                target_price = task.get("target_price")
+                is_suspicious_price = False
+                if flights and target_price:
+                    cheapest_parsed = min(flights, key=lambda f: f["base_price"])
+                    if cheapest_parsed["base_price"] < target_price * 0.5:
+                        self.emit_log(search_id, platform, "warning", f"Parsed cheapest price ₹{cheapest_parsed['base_price']} is suspicious (benchmark ₹{target_price}). Forcing LLM Vision fallback...")
+                        is_suspicious_price = True
+
+                if not flights or is_suspicious_price:
+                    if hasattr(worker, "_parse_via_vision"):
+                        self.emit_log(search_id, platform, "info", "Running LLM Vision fallback for accurate price extraction...")
+                        vision_flights = await worker._parse_via_vision(page)
+                        if vision_flights:
+                            flights = vision_flights
+                            self.emit_log(search_id, platform, "info", f"LLM Vision successfully parsed {len(flights)} flights.")
+                        else:
+                            if not flights:
+                                raise ValueError(f"No flights found on {worker.platform_name} matching search criteria.")
+                    else:
+                        if not flights:
+                            raise ValueError(f"No flights found on {worker.platform_name} matching search criteria.")
                 
                 # Sort and select target flights (top 5 cheapest or specific matching flight)
                 sorted_flights = sorted(flights, key=lambda f: f["base_price"])
@@ -751,8 +843,18 @@ class Dispatcher:
                 else:
                     target_flights = sorted_flights[:5]
                 
-                # Load coupons from task schema
-                coupons = list(task.get("coupons_by_platform", {}).get(platform, []))
+                # Load coupons dynamically from database to pick up background-harvested coupons
+                coupons = []
+                if self.db:
+                    try:
+                        db_coupons = await self.db.get_coupons_for_platform(platform)
+                        coupons = [dict(c) for c in db_coupons]
+                    except Exception as e:
+                        logger.warning(f"Failed to query coupons dynamically from DB: {e}")
+
+                if not coupons:
+                    coupons = list(task.get("coupons_by_platform", {}).get(platform, []))
+
                 try:
                     onsite_coupons = await worker.scrape_onsite_coupons(page)
                     if onsite_coupons:
@@ -764,21 +866,80 @@ class Dispatcher:
                 except Exception as e:
                     logger.warning(f"Failed to scrape onsite coupons: {e}")
                 
+                selected_flight = target_flights[0]
+                self.emit_log(search_id, platform, "info", f"Selected cheapest flight {selected_flight['flight_number']} (Base: Rs. {selected_flight['base_price']})")
+                await worker.select_flight(page, selected_flight)
+
+                # Check if coupon input field is visible on the review/details page (before filling passenger details)
+                coupon_input_visible = False
+                try:
+                    for selector in [worker.coupon_selector, "input[placeholder*='promo' i]", "input[placeholder*='coupon' i]", "#promoCode", "#couponCode", "#coupon", "#promo"]:
+                        if selector:
+                            el = await page.query_selector(selector)
+                            if el and await el.is_visible():
+                                coupon_input_visible = True
+                                break
+                except Exception:
+                    pass
+
+                if coupon_input_visible:
+                    self.emit_log(search_id, platform, "info", "Coupon input field detected early. Testing coupons without filling passenger details...")
+                else:
+                    self.emit_log(search_id, platform, "info", "Navigating to checkout screen semantically...")
+                    self.emit_ws("bot:status", {"searchId": search_id, "platform": platform, "phase": "passenger_details", "progress": 80})
+                    await worker.fill_passenger_details(page)
+                    await worker.skip_addons(page)
+                    await worker.proceed_to_checkout(page)
+                    
+                    # Verify we reached checkout
+                    if not await worker.is_at_checkout(page):
+                        self.emit_log(search_id, platform, "warning", "Failed to confirm checkout screen. Proceeding with coupon test anyway.")
+
+                # Run sequential coupon testing (limit to top 3 for real platforms)
+                self.emit_ws("bot:status", {"searchId": search_id, "platform": platform, "phase": "testing_coupons", "progress": 85})
+
+                # Filter coupons by airline matching for the selected flight
+                filtered_coupons = [c for c in coupons if is_coupon_airline_match(c.get("description", ""), selected_flight["airline"])]
+
+                from coupon_brute_forcer import CouponBruteForcer
+                forcer = CouponBruteForcer(worker, self.financial_filter, self.emit_log)
+                bf_result = await forcer.brute_force(
+                    page,
+                    filtered_coupons,
+                    financial,
+                    search_id,
+                    db=self.db,
+                    route=f"{trip['origin']}-{trip['destination']}",
+                    max_tests=3  # Limit to 3 coupons to avoid bot detection
+                )
+
+                # ── CALCULATE SCORES AND SAVE ALL TARGET FLIGHTS ──
+                self.emit_ws("bot:status", {"searchId": search_id, "platform": platform, "phase": "aggregating", "progress": 90})
+
+                # Get set of successful coupon codes from brute force
+                successful_codes = {r["code"] for r in bf_result["all_results"] if r.get("status") == "valid_match"}
+
+                is_dom = is_domestic_route(trip["origin"], trip["destination"])
+                price_floor = 1200.0 if is_dom else 1.0
+
                 for idx, f in enumerate(target_flights):
-                    f_base = f["base_price"]
-                    f_coupon = ""
-                    f_savings = 0.0
-                    
-                    is_dom = is_domestic_route(trip["origin"], trip["destination"])
-                    price_floor = 1200.0 if is_dom else 1.0
-                    f_final = max(price_floor, f_base)
                     winning_coupon = None
-                    
-                    # Offline mathematical coupon matching
-                    if coupons:
-                        passed_coupons, _ = self.financial_filter.filter_coupons(coupons, financial)
+                    if idx == 0:
+                        f_base = bf_result["baseline_price"]
+                        f_coupon = bf_result["best_coupon"]
+                        f_savings = min(bf_result["savings"], f_base)
+                        f_final = max(price_floor, f_base - f_savings)
+                        f_savings = max(0.0, f_base - f_final)
+                        if f_coupon:
+                            winning_coupon = next((c for c in coupons if c["code"].upper() == f_coupon.upper()), None)
+                    else:
+                        f_base = f["base_price"]
+                        # Offline mathematical matching on successful codes
                         best_discount = 0.0
+                        passed_coupons, _ = self.financial_filter.filter_coupons(coupons, financial)
                         for coupon in passed_coupons:
+                            if coupon["code"] not in successful_codes:
+                                continue
                             # Apply airline match filter
                             if not is_coupon_airline_match(coupon.get("description", ""), f["airline"]):
                                 continue
@@ -793,40 +954,42 @@ class Dispatcher:
                                         discount = max_disc
                                 else:
                                     discount = val
-                                if discount > best_discount:
-                                    best_discount = discount
-                                    winning_coupon = coupon
-                        
-                        if winning_coupon:
-                            f_savings = best_discount
-                            f_coupon = winning_coupon["code"]
-                            
-                            # Apply coupon instincts check & correction
-                            if self.coupon_instincts:
-                                corrected_savings = await self.coupon_instincts.audit_and_correct(
-                                    platform=platform,
-                                    coupon_code=f_coupon,
-                                    base_price=f_base,
-                                    calculated_discount=f_savings,
-                                    is_domestic=is_dom,
-                                    search_id=search_id
-                                )
-                                f_savings = corrected_savings
 
-                            f_final = max(price_floor, f_base - f_savings)
-                            f_savings = max(0.0, f_base - f_final)
-                            if idx == 0:
-                                self.emit_log(search_id, platform, "success", f"Mathematically matched best coupon: {f_coupon} (saves Rs. {f_savings})")
-                        else:
-                            f_final = max(price_floor, f_base)
-                            f_savings = max(0.0, f_base - f_final)
-                    else:
-                        f_final = max(price_floor, f_base)
+                                # Calculate net EMI savings for this offline coupon
+                                from savings_stacker import calculate_net_emi_savings
+                                net_discount, interest_cost, emi_warning = calculate_net_emi_savings(
+                                    coupon_code=coupon["code"],
+                                    coupon_desc=coupon.get("description", ""),
+                                    requires_emi=coupon.get("requires_emi", False),
+                                    base_price=f_base,
+                                    face_discount=discount
+                                )
+                                if net_discount > best_discount:
+                                    best_discount = net_discount
+                                    winning_coupon = coupon
+
+                        f_coupon = winning_coupon["code"] if winning_coupon else ""
+                        f_savings = best_discount
+
+                        # Apply coupon instincts check & correction
+                        if self.coupon_instincts and f_coupon:
+                            corrected_savings = await self.coupon_instincts.audit_and_correct(
+                                platform=platform,
+                                coupon_code=f_coupon,
+                                base_price=f_base,
+                                calculated_discount=f_savings,
+                                is_domestic=is_dom,
+                                search_id=search_id
+                            )
+                            f_savings = corrected_savings
+
+                        f_savings = min(f_savings, f_base)
+                        f_final = max(price_floor, f_base - f_savings)
                         f_savings = max(0.0, f_base - f_final)
                     
                     # Stacking savings
                     bank_restriction = None
-                    if winning_coupon and f_coupon:
+                    if winning_coupon:
                         bank_restriction = winning_coupon.get("bank") or winning_coupon.get("bank_restriction")
 
                     savings_breakdown = await self.savings_stacker.calculate_all_savings(
@@ -835,6 +998,42 @@ class Dispatcher:
                         financial_profile=financial,
                         bank_restriction=bank_restriction
                     )
+
+                    # Calculate and layer in EMI interest overhead into the final effective price!
+                    if winning_coupon:
+                        from savings_stacker import calculate_net_emi_savings
+                        orig_face_discount = f_savings
+                        if idx == 0:
+                            matching_r = next((r for r in bf_result["all_results"] if r["code"].upper() == f_coupon.upper()), None)
+                            if matching_r:
+                                orig_face_discount = matching_r.get("face_savings", f_savings)
+                        else:
+                            orig_face_discount = 0.0
+                            if winning_coupon:
+                                val = winning_coupon.get("discount_value") or 0.0
+                                if winning_coupon.get("discount_type") == "PERCENT":
+                                    orig_face_discount = f_base * (val / 100.0)
+                                    max_disc = winning_coupon.get("max_discount")
+                                    if max_disc and orig_face_discount > max_disc:
+                                        orig_face_discount = max_disc
+                                else:
+                                    orig_face_discount = val
+
+                        _, interest_cost, emi_warning = calculate_net_emi_savings(
+                            coupon_code=f_coupon,
+                            coupon_desc=winning_coupon.get("description", ""),
+                            requires_emi=winning_coupon.get("requires_emi", False),
+                            base_price=f_base,
+                            face_discount=orig_face_discount
+                        )
+                        if interest_cost > 0:
+                            savings_breakdown["emi_interest"] = interest_cost
+                            savings_breakdown["emi_warning"] = emi_warning
+                            savings_breakdown["effective_price"] += interest_cost
+                            if "instructions" not in savings_breakdown:
+                                savings_breakdown["instructions"] = []
+                            savings_breakdown["instructions"].append(f"⚠️ {emi_warning}")
+
                     effective_price = savings_breakdown["effective_price"]
                     
                     # Deal score
@@ -847,11 +1046,15 @@ class Dispatcher:
                     )
                     
                     # Save final result to SQLite
+                    flight_num = f["flight_number"]
+                    if "direction" in task:
+                        flight_num = f"{flight_num} ({trip['origin']} ➔ {trip['destination']})"
+
                     result = {
                         "id": str(uuid.uuid4()),
                         "search_id": search_id,
                         "platform": platform,
-                        "flight_number": f["flight_number"],
+                        "flight_number": flight_num,
                         "airline": f["airline"],
                         "departure_time": f["departure_time"],
                         "arrival_time": f["arrival_time"],
@@ -863,7 +1066,7 @@ class Dispatcher:
                         "savings": f_savings,
                         "effective_price": effective_price,
                         "deal_score": deal_score,
-                        "all_tested_coupons": [],
+                        "all_tested_coupons": bf_result["all_results"] if idx == 0 else [],
                         "savings_breakdown": savings_breakdown,
                         "session_id": session_id if idx == 0 else None,
                         "rank": 1,
@@ -902,16 +1105,16 @@ class Dispatcher:
                     "platform": platform,
                     "phase": "completed",
                     "progress": 100,
-                    "currentBestPrice": target_flights[0]["base_price"] - (target_flights[0]["base_price"] - f_final if f_coupon else 0),
-                    "currentCouponCode": f_coupon
+                    "currentBestPrice": bf_result["best_price"],
+                    "currentCouponCode": bf_result["best_coupon"]
                 })
-                self.emit_log(search_id, platform, "success", f"Scrape completed! Cheapest flight: Rs. {target_flights[0]['base_price']}")
+                self.emit_log(search_id, platform, "success", f"Pipeline completed! Best Price: Rs. {bf_result['best_price']} (Saved Rs. {bf_result['savings']})")
             
             # Keep browser open and context running for handoff!
             screenshot_task.cancel()
 
-        except Exception as e:
-            # Terminate and clean up context on failure
+        except BaseException as e:
+            # Terminate and clean up context on failure or cancellation
             await self.session_mgr.close_session(session_id)
             if 'screenshot_task' in locals() and not screenshot_task.done():
                 screenshot_task.cancel()

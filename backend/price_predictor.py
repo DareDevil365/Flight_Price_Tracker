@@ -26,6 +26,7 @@ from predictor.pipeline import FeaturePipeline
 from predictor.rules import Layer1RulesEngine
 from predictor.storage import PredictorStorage
 from predictor.graph_rag import GraphRAGEngine
+from predictor.models import XGBOOST_FEATURE_COLS
 
 
 class PricePredictor:
@@ -203,11 +204,7 @@ class PricePredictor:
             conf_high = price_30d * 1.15
 
         # 5. Layer 3: Gradient Boosted Feature Model (XGBoost) via modular tools
-        feature_cols = ["days_to_departure", "booking_window_percentile", "hour_of_departure", 
-                        "days_since_last_price_drop", "days_to_nearest_public_holiday", 
-                        "destination_peak_season_score", "brent_crude_price_usd", "usd_inr_rate"]
-        
-        l3_res = await self.ml_tool.predict_xgboost(route, features, feature_cols)
+        l3_res = await self.ml_tool.predict_xgboost(route, features, XGBOOST_FEATURE_COLS)
         xgb_predicted_price = l3_res["prediction"]
         l3_direction = (
             "RISING" if xgb_predicted_price > current_price * 1.05 else
@@ -363,6 +360,11 @@ class PricePredictor:
             days_peak = features.get("days_to_festival_peak", 99)
             reasoning_bullets.append(f"Upcoming festival '{fest_name}' in {days_peak} days exerts high demand pressure.")
         
+        # Add railway pressure waitlist driver if significant
+        irctc_pressure = features.get("irctc_railway_pressure_index", 0.0)
+        if irctc_pressure > 0.05:
+            reasoning_bullets.append(f"High train waitlist saturation (Index: {irctc_pressure:.2f}) indicates alternative rail travel is fully booked, spilling demand into flights.")
+
         # Add rules triggered or signal confidence
         reasoning_bullets.append(f"Ensemble model advises {final_signal} with {int(confidence * 100)}% confidence.")
         
@@ -602,6 +604,7 @@ class PricePredictor:
             "destination_peak_season_score": "Leisure tourist seasonality peak index",
             "brent_crude_price_usd": "Brent crude down 8% this month" if features.get("brent_crude_price_usd", 80) < 82 else "Global oil market trends",
             "usd_inr_rate": "Forex USD/INR exchange rate delta",
-            "hour_of_departure": "Midnight departure window ticket clearance"
+            "hour_of_departure": "Midnight departure window ticket clearance",
+            "irctc_railway_pressure_index": "Indian Railways (IRCTC) waitlist pressure index"
         }
         return translations.get(col, f"Feature signal: {col}")
